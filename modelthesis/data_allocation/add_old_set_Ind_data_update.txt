@@ -1,0 +1,77 @@
+%3. set_Ind_data.m — use cols 6 & 7 to assign age codes 3 vs 4 to individuals
+%This is the trickiest part — instead of assigning all elderly as 3, we now assign 3 (young-old) or 4 (old-old) based on the per-HH counts in cols 6 & 7.
+
+
+
+function Individuals_data=set_Ind_data(DATA)
+% HH_data cols: stat, HH ID, Individuals, childrens, old(encoded), young_old, old_old
+
+U=unique(DATA(:,3));
+U(U==1)=[];
+U(isnan(U))=[];
+individuals=[];
+
+for i=1:length(U)
+    ind=DATA(DATA(:,3)==U(i),:);
+    ind_no_old   = repmat(ind(ind(:,5)==0,:), U(i), 1);
+    ind_one_old  = repmat(ind(ind(:,5)==3,:), U(i), 1);
+    ind_one_old(sum(ind(:,5)==3)+1:end, 5) = 0;
+    ind_2_old    = repmat(ind(ind(:,5)==6,:), U(i), 1);
+    ind_2_old(:,5) = 3;
+
+    individuals=[individuals; [ind_no_old; ind_one_old; ind_2_old]];
+end
+individuals=[individuals; DATA(DATA(:,3)==1,:)];
+individuals(individuals(:,1)==0,:)=[];
+individuals=sortrows(individuals, [2,5]);
+
+u=unique(individuals(:,3));
+KID_DATA=[];
+for i=1:length(u)
+    kid_data=individuals(individuals(:,3)==u(i),:);
+    k=unique(kid_data(:,4));
+    for j=1:length(k)
+        kid_data_j=kid_data(kid_data(:,4)==k(j),:);
+        FS=[ones(k(j),1); zeros(u(i)-k(j),1)];
+        FS=repmat(FS, [size(kid_data_j,1)/size(FS,1), 1]);
+        assert(size(FS,1)==size(kid_data_j,1));
+        kid_data_j(FS==1,5)=1;
+        assert(size(FS,1)==size(kid_data_j,1));
+        KID_DATA=[KID_DATA; kid_data_j];
+    end
+end
+Individuals_data = KID_DATA;
+Individuals_data(Individuals_data(:,5)==0, 5) = 2;  % adults
+
+% ----------------------------------------------------------------
+% <<< NEW: assign age code 3 (young-old) or 4 (old-old) to elderly
+% individuals, using the per-HH counts in HH_data cols 6 & 7
+% ----------------------------------------------------------------
+elderly_idx = find(Individuals_data(:,5) == 3);  % all rows currently marked as old
+
+% get the unique HH ids that have elderly individuals
+elderly_hh_ids = unique(Individuals_data(elderly_idx, 3));
+
+for h = 1:length(elderly_hh_ids)
+    hh_id = elderly_hh_ids(h);
+    
+    % find this HH's row in DATA to read young_old / old_old counts
+    hh_row = DATA(DATA(:,2) == hh_id, :);
+    if isempty(hh_row)
+        continue;
+    end
+    n_young_old = hh_row(1, 6);  % col 6: young-old count
+    n_old_old   = hh_row(1, 7);  % col 7: old-old count
+    
+    % find this individual's elderly rows
+    hh_elderly = find(Individuals_data(:,3) == hh_id & Individuals_data(:,5) == 3);
+    
+    % assign: first n_young_old get code 3, rest get code 4
+    % (order is arbitrary since elderly within an HH aren't ordered)
+    n_young_old = min(n_young_old, length(hh_elderly));
+    n_old_old   = min(n_old_old,   length(hh_elderly) - n_young_old);
+    
+    Individuals_data(hh_elderly(1:n_young_old), 5) = 3;          % young-old (65-74)
+    Individuals_data(hh_elderly(n_young_old+1:n_young_old+n_old_old), 5) = 4;  % old-old (75+)
+end
+% ----------------------------------------------------------------

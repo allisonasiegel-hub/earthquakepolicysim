@@ -1,0 +1,167 @@
+%2. create_HH_12_2018.m — accept HH_75_pcnt, split elderly into cols 6 & 7
+%The key logic: after all elderly are assigned to HHs, for each SA compute how many of those elderly should be 75+ (proportional to pcnt_75 / pcnt_65 of the SA population), then randomly %%%%assign that split across the HHs that have elderly.
+
+
+
+
+function HH_data=create_HH_12_2018(institute_65,sa_data,sa_data_P,data,total_65,HH_65_pcnt,HH_65_alone,HH_75_pcnt,HH1,HH2,...
+    HH3,HH4,HH5,HH6,HH7,HH_child_total,...
+    chil1,chil2,chil3,chil4,chil5)
+% <<< NEW: added HH_75_pcnt input argument
+HH_data=[];
+
+%% old people
+total_65=strcmp(sa_data_P(1,:),total_65)==1;
+institute_65=strcmp(sa_data_P(1,:),institute_65)==1;
+HH_65_pcnt=strcmp(sa_data_P(1,:),HH_65_pcnt)==1;
+HH_65_alone=strcmp(sa_data_P(1,:),HH_65_alone)==1;
+HH_75_pcnt=strcmp(sa_data_P(1,:),HH_75_pcnt)==1; % <<< NEW
+
+%% HH size
+HH1=find(strcmp(sa_data_P(1,:),HH1)==1);
+HH2=find(strcmp(sa_data_P(1,:),HH2)==1);
+HH3=find(strcmp(sa_data_P(1,:),HH3)==1);
+HH4=find(strcmp(sa_data_P(1,:),HH4)==1);
+HH5=find(strcmp(sa_data_P(1,:),HH5)==1);
+HH6=find(strcmp(sa_data_P(1,:),HH6)==1);
+HH7=find(strcmp(sa_data_P(1,:),HH7)==1);
+HH_size=[HH1,HH2,HH3,HH4,HH5,HH6,HH7];
+
+%% number of children
+HH_child_total=strcmp(sa_data_P(1,:),HH_child_total)==1;
+chil1=find(strcmp(sa_data_P(1,:),chil1)==1);
+chil2=find(strcmp(sa_data_P(1,:),chil2)==1);
+chil3=find(strcmp(sa_data_P(1,:),chil3)==1);
+chil4=find(strcmp(sa_data_P(1,:),chil4)==1);
+chil5=find(strcmp(sa_data_P(1,:),chil5)==1);
+HH_chil=[chil1,chil2,chil3,chil4,chil5];
+
+ind=1;
+for i=1:size(data,1)
+    stat_HH=[];
+    stat=find(sa_data(:,1)==data(i,1));
+    stat_HH=(ind:ind+data(i,2)-1)';
+    stat_HH=[ones(size(stat_HH,1),1).*data(i,1),stat_HH];
+    
+    %% elderly living alone
+    num_65=round(sa_data(stat,HH_65_pcnt)*data(i,2)/100);
+    num_65_alone=round(sa_data(stat,HH_65_alone)/100*num_65);
+    stat_HH(1:num_65_alone,3)=1;
+    stat_HH(1:num_65_alone,4)=3;   
+    HH_with_atleast_1_65=num_65-num_65_alone;
+
+    %% HH size
+    stat_HH_size=floor(sa_data(stat,HH_size))/100;
+    stat_HH_size=round(stat_HH_size.*data(i,2));
+    H=sum(stat_HH_size);
+    if size(stat_HH,1)>H
+        stat_HH(H+1:end,:)=[];
+    end
+    stat_HH_size(1)=stat_HH_size(1)-sum(stat_HH(:,3)==1);
+    k=find(stat_HH(:,3)==0,1,'first');
+    for s=1:length(stat_HH_size)
+        stat_HH(k:k+stat_HH_size(s)-1,3)=s;
+        k=k+stat_HH_size(s);
+    end
+       
+    %% children
+    stat_HH_child=floor(sa_data(stat,HH_chil))/100;
+    stat_HH_child_total=floor(sa_data(stat,HH_child_total))/100;
+    family_with_children=round(stat_HH_child_total.*size(stat_HH,1));
+    stat_HH_child=round(stat_HH_child.*size(stat_HH,1));
+    child=length(stat_HH_child):-1:1;
+    stat_HH(:,5)=zeros(size(stat_HH,1),1);
+    for s=1:length(stat_HH_child)
+        f=find(stat_HH(:,3)>child(s) & stat_HH(:,5)==0 & stat_HH(:,4)<3);
+        if length(f)<stat_HH_child(child(s))
+            stat_HH_child(child(s))=length(f);
+        end
+        f=datasample(f,stat_HH_child(child(s)),'replace',false);
+        stat_HH(f,5)=child(s);         
+    end
+
+    %% delete extras HH
+    stat_HH(stat_HH(:,1)==0,:)=[];
+
+    %% number of old people
+    num_65=round(sa_data(i,total_65)/100*sum(stat_HH(:,3)));
+    ins_65=round(sa_data(i,institute_65)/100*num_65);
+    extra_65=num_65-ins_65-sum(stat_HH(:,4)==3);  
+    f=(stat_HH(:,3)-stat_HH(:,5))>1;
+    f=stat_HH(f,2);
+    if length(f)<extra_65
+        extra_65=length(f);
+    end
+    extra_65(isnan(extra_65))=0;
+    extra_65(extra_65<0)=0;
+    F=datasample(f,extra_65,'replace',true);
+    a = unique(F);
+    out = [a,histc(F(:),a)];
+    P1=out(:,2)>2;
+    P=sum(out(P1,2))-sum(P1)*2;
+    out(out(:,2)>2,2)=2;
+    locA=ismember(stat_HH(:,2),out(:,1));
+    stat_HH(locA,4)=out(:,2).*3;
+    locA=ismember(f,F);
+    f(locA)=[];
+    F1=datasample(f,P,'replace',false);
+    locA=ismember(stat_HH(:,2),F1);
+    stat_HH(locA,4)=3;
+
+    % ----------------------------------------------------------------
+    % <<< NEW: split elderly in this SA into young-old (65-74) vs old-old (75+)
+    % stat_HH col 6 = count of young-old, col 7 = count of old-old
+    % ----------------------------------------------------------------
+    stat_HH(:,6) = 0;  % young-old (65-74) count per HH
+    stat_HH(:,7) = 0;  % old-old (75+) count per HH
+
+    % total elderly assigned in this SA (encoded as 3 = one, 6 = two)
+    total_old_in_SA = sum(stat_HH(:,4)) / 3;  % converts encoding back to count
+
+    % how many should be 75+: use SA % of 75+ among ALL residents,
+    % scaled by the ratio to total 65+ to get the share among elderly
+    pcnt_65 = sa_data(stat, HH_65_pcnt);   % % of residents who are 65+
+    pcnt_75 = sa_data(stat, HH_75_pcnt);   % % of residents who are 75+
+    if pcnt_65 > 0
+        frac_75_among_old = min(pcnt_75 / pcnt_65, 1);  % share of elderly who are 75+
+    else
+        frac_75_among_old = 0;
+    end
+    num_old_old = round(total_old_in_SA * frac_75_among_old);
+    num_young_old = total_old_in_SA - num_old_old;
+
+    % get indices of HHs with elderly, listed by individual elderly person
+    % (HHs with 2 elderly appear twice)
+    hh_with_1_old = find(stat_HH(:,4) == 3);
+    hh_with_2_old = find(stat_HH(:,4) == 6);
+    elderly_hh_list = [hh_with_1_old; hh_with_2_old; hh_with_2_old]; % 2nd elderly in 2-old HHs
+
+    % randomly assign old-old slots across the elderly population
+    num_total_elderly_slots = length(elderly_hh_list);
+    num_old_old = min(num_old_old, num_total_elderly_slots);
+    old_old_slots = false(num_total_elderly_slots, 1);
+    old_old_idx = datasample(1:num_total_elderly_slots, num_old_old, 'replace', false);
+    old_old_slots(old_old_idx) = true;
+
+    % accumulate counts per HH
+    for k = 1:num_total_elderly_slots
+        hh_row = elderly_hh_list(k);
+        if old_old_slots(k)
+            stat_HH(hh_row, 7) = stat_HH(hh_row, 7) + 1;  % old-old
+        else
+            stat_HH(hh_row, 6) = stat_HH(hh_row, 6) + 1;  % young-old
+        end
+    end
+    % ----------------------------------------------------------------
+
+    HH_data=[HH_data;stat_HH];
+    ind=ind+size(stat_HH,1);
+end
+
+HH_data(HH_data(:,3)==0,:)=[];
+% cols: stat, HH ID, Individuals, childrens, old(encoded), young_old count, old_old count
+HH_data=[HH_data(:,1:3), HH_data(:,5), HH_data(:,4), HH_data(:,6), HH_data(:,7)];
+
+end
+
+

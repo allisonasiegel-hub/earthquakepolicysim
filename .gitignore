@@ -38,3 +38,10 @@ codegen/
 # SimBiology backup files
 *.sbproj.backup
 *.sbproj.bak
+
+# Generic editor/manual backup files
+*.bak
+
+# Python cache
+__pycache__/
+*.pyc
