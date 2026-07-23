@@ -1,4 +1,4 @@
-function score=SA_score_old(pd,wresd,wservice,service_mean,service_std,Build_Data,Individuals_data,HH_data,FFF1,u,stat_data)
+function score=SA_score_old(pd,wresd,wservice,wservice_old,service_mean,service_std,Build_Data,Individuals_data,HH_data,FFF1,u,stat_data)
 % same calculation as in HH_living_data
 hh_id=HH_data(FFF1,2); % moving HH ID
 ind=Individuals_data(Individuals_data(:,3)==hh_id,:); % agents in HH 
@@ -57,21 +57,17 @@ if isElderly
 
     end
 
-    % <<< TODO: differentiate wservice for old-old (70+) vs young-old (65-69)
-    % households once ready. HH_data col 12 (old_old_count) only exists in
-    % .mat files built after the age-split addition (e.g.
-    % data_for_model_tmine_agesplit70.mat) -- do not uncomment against
-    % older-format HH_data (fewer than 12 columns) without checking first.
-    % Old-old takes priority: a household with >=1 old-old member counts as
-    % old-old; an elderly household with 0 old-old members is young-old.
-    % isOldOld = HH_data(FFF1,12) >= 1;
-    % wservice_hh = wservice;
-    % if isOldOld
-    %     wservice_hh = wservice_old; % higher weight for old-old households
-    % end
-    % Y = (income + age + wservice_hh*service)/(2+wservice_hh);
-
-    Y = (income + age + wservice*service)/(2+wservice);
+    % Old-old (70+) vs young-old (65-69) differentiation. Old-old takes
+    % priority: a household with >=1 old-old member counts as old-old; an
+    % elderly household with 0 old-old members is young-old. Requires
+    % HH_data col 12 (old_old_count), only present in .mat files built
+    % after the age-split addition (e.g. data_for_model_tmine_agesplit70.mat).
+    isOldOld = HH_data(FFF1,12) >= 1;
+    wservice_hh = wservice;
+    if isOldOld
+        wservice_hh = wservice_old; % higher weight for old-old households
+    end
+    Y = (income + age + wservice_hh*service)/(2+wservice_hh);
 
 else
 

@@ -7,11 +7,20 @@ function moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,K,el
 
     for u=1:length(unique_stat) 
       intra_SA_data = intra_SA(intra_SA(:,1)==unique_stat(u),K); % K={2,3,4} - 'intraSAProb'; matching SA ID
-      
+
       if size(intra_SA_data,1) > 1
-          intra_SA_data = nanmean(intra_SA_data); % avarage probability 
-      end    
-      
+          intra_SA_data = nanmean(intra_SA_data); % avarage probability
+      end
+
+      % BUG FIX: intraSAProb/intraYeshuvProb/interYeshuvProb are annual
+      % rates (same source/convention as inOutRatio, which migration_19.m
+      % correctly divides by 365) but were being used here as a raw
+      % per-step probability -- ~365x too high. Confirmed against real
+      % census data (growthrates1.xlsx): the model's raw intraYeshuvProb
+      % (3-9%) is close in magnitude to the real ANNUAL within-settlement
+      % between-SA leaving rate (2-5.5%), not a daily one.
+      intra_SA_data = intra_SA_data/365;
+
       move_prob = intra_SA_data * ones(SH,1);
 
       move_prob(elderly) = ...

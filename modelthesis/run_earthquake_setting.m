@@ -1,4 +1,4 @@
-function saved_path = run_earthquake_setting(wservice, eld_movef, svc_filter, scenario_tag, steps, lu_update_every, lu_warmup, sa_update_every, resSearchLen)
+function saved_path = run_earthquake_setting(wservice, wservice_old, eld_movef, svc_filter, scenario_tag, steps, lu_update_every, lu_warmup, sa_update_every, resSearchLen)
 % Minimal-testing wrapper around run_model_earthquake.m, mirroring
 % run_sweep_setting.m's existing pattern for nextchangesfortracker.m:
 % pre-set fast-testing values (single replicate, short run, infrequent
@@ -33,16 +33,25 @@ function saved_path = run_earthquake_setting(wservice, eld_movef, svc_filter, sc
 % to whatever `steps` this call actually uses, matching
 % run_model_earthquake.m's own default -- pass it explicitly to override.
 %
+% wservice_old: service-preference weight specifically for old-old (70+)
+% households (HH_data col 12 >= 1); wservice itself now applies to
+% young-old (65-69) and non-elderly-adjacent baseline. Defaults to
+% wservice (no differentiation) if not given.
+%
+% NOTE signature changed from earlier sessions: wservice_old is now the
+% 2nd argument, shifting every positional arg after it by one.
+%
 % Usage:
-%   run_earthquake_setting(0, 1, 0, 'baseline')
-%   run_earthquake_setting(0.25, 1, 1, 'wservice025_svcfilter1')
-%   run_earthquake_setting(0, 1, 0, 'baseline', 30, 3, 15, 5)  % sa_update_every=5
+%   run_earthquake_setting(0, 0, 1, 0, 'baseline')
+%   run_earthquake_setting(0.25, 0.25, 1, 1, 'both_elderly_same')
+%   run_earthquake_setting(0.25, 1, 1, 1, 'old_old_stronger', 100, 3, 4, 5, 30)
 
-if nargin<5; steps=100; end
-if nargin<6; lu_update_every=3; end
-if nargin<7; lu_warmup=4; end
-if nargin<8; sa_update_every=30; end
-if nargin<9; resSearchLen=max(1,round(steps*30/760)); end
+if nargin<2 || isempty(wservice_old); wservice_old=wservice; end
+if nargin<6; steps=100; end
+if nargin<7; lu_update_every=3; end
+if nargin<8; lu_warmup=4; end
+if nargin<9; sa_update_every=30; end
+if nargin<10; resSearchLen=max(1,round(steps*30/760)); end
 
 n_sims=1;
 

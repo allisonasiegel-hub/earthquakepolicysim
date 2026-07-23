@@ -8,12 +8,22 @@ if size(possible_assets,1)>1
 else
     selected_A=(possible_assets);
 end
-if selected_A(3)>1 
+if selected_A(3)>1
     Assets(Assets(:,3)==selected_A(3),11)=1; % mark assest as occupied
     Assets(Assets(:,3)==HH_data(FFF1,11),11)=0; % mark old assets empty
     new_A(:,4)=HH_data(FFF1,1);
     HH_data(FFF1,11)=selected_A(3); % change HH data to new assets
     HH_data(FFF1,10)=selected_A(2); % change HH data to new building
+    % BUG FIX: SA (col 1) was never synced to the new asset's SA, so any
+    % cross-SA move (via find_new_house_sa_score, used for same-yeshuv/
+    % other-yeshuv relocations) silently kept the household's OLD SA on
+    % record forever -- HH_MOVE_TRACK's Final_SA always equaled
+    % Original_SA, every SA-level metric/map stayed blind to real
+    % relocations, and who_is_moving.m kept evaluating these HH under
+    % their stale original SA's move probability. Within-SA moves
+    % (find_new_house_same_stat's primary pathway) are unaffected since
+    % selected_A(1) already equals the current SA there.
+    HH_data(FFF1,1)=selected_A(1); % sync SA to the new asset's SA
     new_A(:,1)=selected_A(3);
     new_A(:,2)=1;
     new_A(:,3)=selected_A(1);

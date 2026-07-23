@@ -45,3 +45,7 @@ codegen/
 # Python cache
 __pycache__/
 *.pyc
+
+# Excel lock files
+~$*.xlsx
+~$*.xls
