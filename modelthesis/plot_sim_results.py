@@ -100,7 +100,7 @@ SWEEP_METRIC_FAMILIES = {
     'Success rate (city)':      ('SuccessCity_Avg_E', 'SuccessCity_Avg_NE', 'SuccessCity_Delta_E', 'SuccessCity_Delta_NE', 'rate'),
 }
 
-PARAM_AXES = ['wservice', 'eld_movef', 'svc_filter']
+PARAM_AXES = ['wservice', 'eld_movef', 'svc_filter', 'wservice_old']
 
 
 def _plot_one_sweep_metric(ax, df_summary, param, col_e, col_ne, ylabel, title):
@@ -129,9 +129,13 @@ def mode_sweep(args):
     # this is the _summary.csv; if it's results_long.csv instead, summarize
     # here so mean_/std_ columns exist either way.
     if not any(c.startswith('mean_') for c in df.columns):
-        metric_cols = [c for c in df.columns if c not in
-                       ('ParamVaried', 'wservice', 'eld_movef', 'svc_filter', 'Replicate', 'GroupCount')]
-        df = df.groupby(['ParamVaried', 'wservice', 'eld_movef', 'svc_filter'])[metric_cols].agg(['mean', 'std'])
+        # group by every axis column actually present, not just the
+        # original 3 -- otherwise a sweep over an axis like wservice_old
+        # (with wservice/eld_movef/svc_filter held constant) collapses
+        # every row into one group and the swept values are lost.
+        axis_cols = [c for c in PARAM_AXES if c in df.columns]
+        metric_cols = [c for c in df.columns if c not in (['ParamVaried', 'Replicate', 'GroupCount'] + axis_cols)]
+        df = df.groupby(['ParamVaried'] + axis_cols)[metric_cols].agg(['mean', 'std'])
         df.columns = [f'{stat}_{col}' for col, stat in df.columns]
         df = df.reset_index()
 
