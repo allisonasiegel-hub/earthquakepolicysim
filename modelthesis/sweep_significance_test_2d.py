@@ -20,8 +20,11 @@ from itertools import combinations
 df = pd.read_csv('wservice_2d_sweep_raw.csv')
 groups = ['svc_old_old_movers', 'svc_young_old_movers', 'svc_non_elderly_movers']
 
+n_per_cell = df.groupby(['wservice', 'wservice_old']).size().iloc[0]
+n_per_wservice = df.groupby('wservice').size().iloc[0]
+
 print('=' * 78)
-print('PAIRWISE WELCH T-TESTS on wservice_old, WITHIN each young-old wservice facet (n=3 vs n=3)')
+print(f'PAIRWISE WELCH T-TESTS on wservice_old, WITHIN each young-old wservice facet (n={n_per_cell} vs n={n_per_cell})')
 print('=' * 78)
 for wy in sorted(df['wservice'].unique()):
     sub = df[df['wservice'] == wy]
@@ -40,7 +43,7 @@ for wy in sorted(df['wservice'].unique()):
 
 print()
 print('=' * 78)
-print('MONOTONIC TREND TEST (Pearson r, svc vs wservice_old, n=9 per facet)')
+print('MONOTONIC TREND TEST (Pearson r, svc vs wservice_old, n=3*reps per facet)')
 print('=' * 78)
 for wy in sorted(df['wservice'].unique()):
     sub = df[df['wservice'] == wy]
@@ -53,7 +56,7 @@ for wy in sorted(df['wservice'].unique()):
 
 print()
 print('=' * 78)
-print('WSERVICE (YOUNG-OLD) EFFECT: 0.25 vs 0.35, pooled across wservice_old grid (n=9 vs n=9)')
+print(f'WSERVICE (YOUNG-OLD) EFFECT: 0.25 vs 0.35, pooled across wservice_old grid (n={n_per_wservice} vs n={n_per_wservice})')
 print('=' * 78)
 for group in groups:
     xa = df.loc[df['wservice'] == 0.25, group].dropna().values
