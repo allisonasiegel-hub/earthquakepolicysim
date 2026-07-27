@@ -41,6 +41,17 @@ function saved_path = run_earthquake_setting(wservice, wservice_old, eld_movef, 
 % NOTE signature changed from earlier sessions: wservice_old is now the
 % 2nd argument, shifting every positional arg after it by one.
 %
+% CONCURRENCY WARNING: the temp tag file ('__run_earthquake_setting_tmp.mat')
+% and the intermediate output path run_model_earthquake.m itself writes
+% (earthquakeF\<out_file_name> <kk>.mat, before the scenario-tag copy below)
+% are both fixed, non-unique paths. Two separate MATLAB processes calling
+% this function in the same working directory AT THE SAME TIME will race on
+% both files and silently produce cross-contaminated output (confirmed:
+% one process's run gets saved under the other's scenario_tag). Sweep
+% scripts are safe because their loops run sequentially within a single
+% MATLAB process -- never launch two `matlab -batch` sweep jobs against
+% this directory concurrently.
+%
 % Usage:
 %   run_earthquake_setting(0, 0, 1, 0, 'baseline')
 %   run_earthquake_setting(0.25, 0.25, 1, 1, 'both_elderly_same')
