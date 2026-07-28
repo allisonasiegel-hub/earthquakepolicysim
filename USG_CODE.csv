@@ -1,0 +1,133 @@
+﻿USG_CODE,USG_CODED
+1000,Governmental/National
+2301,Supreme Court
+2302,District Court
+2303,Magistrate's Court
+2305,Beit Din
+2306,Administrative Courts
+3500,IDF
+3505,City Officer
+3600,Police - Unspecified
+3601,Police Station
+3602,Police Point
+3620,Prison Service
+5000,Municipal Authority
+5001,Municipality
+5002,Regional Council
+5003,Local Council
+5004,Village Council/Settlement Committee
+5101,Municipal Intelligence Bureau
+5151,Fire and Rescue Services
+5201,Community Center
+5202,Community Center/Learning Center/Youth Movement
+5253,Nursing Home/Supported Housing
+5300,Educational Institution - Unspecified
+5305,Kindergarten
+5310,Elementary School
+5312,Religious Elementary School
+5320,Middle School
+5321,Religious Middle School
+5330,High School
+5332,Religious High School
+5337,Yeshiva High School/Ulpana
+5338,Boarding School
+5340,Yeshiva/Kollel
+5370,College
+5380,University
+5411,Field School
+5420,Institute - Unspecified
+5425,Weizmann Institute of Science
+5426,Standards Institute
+5500,Religious Institution - Unspecified
+5501,Jewish Religious Institution
+5502,Druze Religious Institution
+5503,Institution Muslim Religious
+5504,Christian Religious Institution
+5505,Bahai Religious Institution
+5521,Synagogue
+5523,Mosque
+5525,Church/Monastery
+5541,Jewish Cemetery
+5542,Muslim Cemetery
+5543,Christian Cemetery
+5544,Druze Cemetery
+5546,Military Cemetery
+5560,Tomb of a Righteous Jew
+5561,Tomb of a Great Nation
+5562,Tomb of a Talk - Building
+5600,Cultural/Entertainment Institution
+5601,Museum/Heritage Center
+5700,Medical Institution - Unspecified
+5705,MDA
+5710,Hospital
+5720,Mental Hospital
+5735,Maternity Hospital
+5736,Children's Hospital
+5740,Clinic/Medical Institute
+5760,Pharmacy
+5900,Hotel/Guest House
+5923,Overnight Parking
+5940,Information Center
+6512,Commercial Center/Mall/Market
+6520,Commerce/Restaurant/Store
+6530,Bank
+6535,Offices
+6600,Sports Facility
+6601,Stadium
+6640,Swimming Pool/Country Club
+6650,Sports Field
+6660,Beach
+6661,Ski Resort
+6700,Garden/Park - Unspecified
+6701,Nature Reserve
+6702,National Park
+6703,Natural Site/Informal Landscape
+6706,KKL-JNF Forest
+6707,Forest - Other
+6710,Theme Park - Unspecified Characterization
+6711,Amusement park
+6712,Water park
+6713,Themed site
+6720,Zoo
+6721,Animal corner
+6725,Observation area
+6729,Public park/city park
+6730,Public park
+6731,Playground
+6800,Transportation facility - no characterization
+6809,Bus parking lot
+6810,Central bus station
+6815,Taxi service
+6824,Parking lot/parking lot
+6830,Road parking lot
+6840,Gas station
+6851,Train station
+6855,Border terminal
+6870,Airport
+6871,International airport
+6874,Airport landing field
+6875,Heliport
+6880,Port
+6881,Ancient port
+6885,Marina/mooring
+7000,National site
+7010,Historic site
+7011,Ruin/ruin
+7020,Active archaeological site
+7021,Inactive archaeological site
+7030,Commemorative site/monument
+7101,Embassy/consulate
+7105,UN
+7300,Industry/factory
+7319,Refinery
+7400,Agricultural use
+7500,Infrastructure - no characterization
+7501,General tank
+7510,Water infrastructure
+7520,Electrical infrastructure
+7530,Fuel and gas infrastructure
+7540,Communication infrastructure
+7600,Residential building in mixed construction
+7615,Construction site
+7620,Public square
+7630,Waste disposal site
