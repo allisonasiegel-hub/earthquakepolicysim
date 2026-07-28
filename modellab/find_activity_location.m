@@ -54,6 +54,8 @@ last_location = [X(:,2),Y(:,2)];                                % 2d coordinates
 % 3 - 'Usage'
 usage = unique(Build_Data(:,3));                                % bld usage list without repetitions
 usage(usage==0) = [];                                           % remove zero members
+usage(usage==7) = [];                                           % hotels are not a plausible routine (non-work) activity destination
+usage(usage==99) = [];                                          % buildings currently in use as a shelter (transient marker, not a real land-use)
 % 20 - 'number_of_activities'
 u  = max(Individuals_data(:,20));                               % max activities
 xx = 3;                                                         % starting column index for extra activities

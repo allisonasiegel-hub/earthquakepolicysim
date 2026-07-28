@@ -29,6 +29,8 @@ for i=1:length(u)
     worker_Metro_zone=round(length(F)*ind_sa);
     WORKER=WORKER+sum(worker_Metro_zone(1:3));
     for j=1:2
+        worker_Metro_zone(j) = min(worker_Metro_zone(j), length(F));
+
         S=sa_data(sa_data(:,47)==metro_zone(j),1);
         [locA,locB]=ismember(work_place(:,4),S);
         B=find(locA==1);

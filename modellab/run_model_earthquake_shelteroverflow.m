@@ -9,8 +9,15 @@
 %   - Sheltering: the ORIGINAL per-agent assign_shelter.m/release_shelter.m
 %     mechanism (NOT the elderly-project's SA/commercial-anchor siting
 %     rewrite assign_shelter_sa.m/release_shelter_capped.m), extended with
-%     retry/exit logic and a max_shelter_duration hard cap - see
-%     run_model_earthquake.m's header for the full description.
+%     retry/exit logic (no max duration - see run_model_earthquake.m's
+%     header for the full description) and hotels as a second "immediate"
+%     shelter-candidate pool alongside public buildings, with their own
+%     room-density-based capacity formula (hotel_room_density *
+%     agents_per_room * Area * floors) - see run_model_earthquake.m's
+%     header and identify_hotels_TVR.m for how hotel_room_density is
+%     calibrated. Hotels are excluded from the routine activity-location
+%     draw pool but do NOT yet participate in land-use/job-creation
+%     dynamics (separate follow-up work).
 %   - Aligned to the colleague-updated baseline versions of
 %     who_is_moving.m, find_new_house_same_stat.m, find_new_house_yeshuv.m,
 %     find_new_house_sa_score.m, pref_hh.m, SA_score_old.m, and
@@ -123,24 +130,31 @@ switch city
         commute_outside=0.778038196; % validated, in active use
         alfa=0.3; beta=0.8; lamda=0.95; delta=0.75; % Ashkelon-calibrated, validated
         JobsPerM_comm=0.007790361; % matches modellab\ASH22\model parameters.csv, validated
+        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     case 'Tiberias'
-        data='data_for_model_TVR'; % data ready (data_for_model_TVR.mat present)
+        % data_for_model_TVR_hotels (NOT the plain data_for_model_TVR) -
+        % identical except 39 buildings are tagged usage=7 (hotel) by
+        % identify_hotels_TVR.m. Drop-in replacement, safe default.
+        data='data_for_model_TVR_hotels';
         file=[fileparts(mfilename('fullpath')),'\TVR\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         commute_outside=NaN; % TODO: not yet calibrated for this city
         alfa=NaN; beta=NaN; lamda=NaN; delta=NaN; % TODO
         JobsPerM_comm=0.008932703; % matches modellab\TVR\model parameters.csv
+        hotel_room_density=0.02128; % rooms per sqm floor-adjusted area - see identify_hotels_TVR.m
     case 'Jerusalem'
         data='data_for_model_JER2'; % TODO: no data_for_model_JER2.mat in modellab yet - run the data_allocation pipeline or copy it in
         file=[fileparts(mfilename('fullpath')),'\JER\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         commute_outside=NaN; % TODO
         alfa=NaN; beta=NaN; lamda=NaN; delta=NaN; % TODO
         JobsPerM_comm=0.0440838; % matches modellab\JER\model parameters.csv
+        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     case 'Arad'
         data='data_for_model_Arad'; % TODO: no data_for_model_Arad.mat in modellab yet - run the data_allocation pipeline or copy it in
         file=[fileparts(mfilename('fullpath')),'\Arad\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         commute_outside=NaN; % TODO
         alfa=NaN; beta=NaN; lamda=NaN; delta=NaN; % TODO
         JobsPerM_comm=0.03400486; % matches modellab\Arad\model parameters.csv
+        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     otherwise
         error('Unknown city "%s" - add a case for it to the city configuration block.', city);
 end
@@ -178,15 +192,66 @@ priority_recovery=0; % faster recovery of residential
 recovery_factor=2.5;
 displaced_shelter=1; % toggle: 0=off (baseline), 1=on - shelter policy of public turn to 99
 agents_per_sqm=0.2;
-% max_shelter_duration: hard cap (steps) on how long a household may stay
-% sheltered before being forced to relocate-or-leave. Placeholder value -
+% agents_per_room: hotel-shelter occupancy assumption (people per room),
+% used with hotel_room_density (city configuration block) to convert
+% estimated room counts into shelter agent capacity. Placeholder value -
 % not yet set through sensitivity testing.
-max_shelter_duration=120;
+agents_per_room=2;
+% public_bldg_usable_fraction: fraction of a public/school building's
+% gross floor area (Area*floors) that's actually usable shelter space -
+% accounts for hallways, offices, fixed-furniture rooms, upper floors
+% without elevator access, etc. Without this, agents_per_sqm alone
+% (~5 sqm/person, a reasonable Sphere-standard density) applied to 100%
+% of gross floor area badly overstates real capacity - for Tiberias,
+% total public capacity (80,113) otherwise exceeds the entire city
+% population (50,419). Placeholder value - not yet set through
+% sensitivity testing.
+public_bldg_usable_fraction=0.4;
+% restrict_public_shelters_to_schools: toggle - if true, only usage=8
+% (school) buildings are eligible for the public/school shelter tier
+% (excludes usage=5 generic public entirely). Lets "all public buildings"
+% vs. "schools only" be compared as different policy runs.
+restrict_public_shelters_to_schools=0;
 % outside_commute_penalty_pct: stylized flat income haircut applied to
 % households sheltered outside the city (shelter-overflow pool), standing
 % in for a computed commute cost. Placeholder value - not yet set through
 % sensitivity testing.
 outside_commute_penalty_pct=0.15;
+% Medium-term sheltering ("temporary developments" - tent city/container
+% site/etc., per shelter_policy_extensions notes): a fixed number of
+% abstract residential SPACES, not individual buildings - no Build_Data
+% row or distance-matrix entry is ever created for them. Tracked entirely
+% in Temp_Dev_Sites/Temp_Dev_Assign (initialized below, near Shelters).
+% temp_dev_delay: steps after shock_step before these spaces open and
+% pull households in from the immediate tier and the out-of-city overflow
+% pool - see the transfer block below the main shock handling. 14 steps ~
+% 2 weeks at the model's current daily step resolution.
+temp_dev_delay=14;
+n_temp_dev_sites=3; % fixed count - not derived from the destroyed-building set
+% temp_dev_capacity_frac: combined capacity across ALL sites = this
+% fraction of the total currently-sheltered population (immediate tier +
+% out-of-city overflow) at the moment the sites open, split evenly across
+% n_temp_dev_sites. Not tied to any building's floor area - these aren't
+% buildings. Easily-tunable placeholder, not yet set through sensitivity
+% testing.
+temp_dev_capacity_frac=0.75;
+% temp_dev_site_coords: optional user-supplied [X,Y] real-world staging
+% locations, one row per site (n_temp_dev_sites x 2). Leave empty to fall
+% back to a data-driven siting proxy (see site_temp_dev_locations.m) -
+% ranks SAs by total destroyed-residential floor area and anchors each
+% site at the largest still-standing building's location in one of the
+% top-damaged SAs, purely as a real-world location reference (no building
+% or distance-matrix row is created from it).
+temp_dev_site_coords=[];
+% temp_dev_duration: steps a temp-dev space stays open once it spawns,
+% per the "exist for a defined period of time" requirement. Once elapsed,
+% any remaining residents are force-released into the out-of-city
+% overflow pool (Sheltered_Outside) - same mechanics as the existing
+% capacity-exhaustion overflow path - and the sites' bookkeeping is
+% closed out; nothing is left behind (no Build_Data row existed to begin
+% with). Placeholder value (~6 months at daily resolution) - not yet set
+% through sensitivity testing.
+temp_dev_duration=180;
 commercial_preservation=0;
 residential_preservation=0;
 
@@ -361,6 +426,10 @@ Shelters=[];
 Shelter_Assign=[];
 Shelter_Building_Routines={};
 Sheltered_Outside=zeros(0,3); % [HH_ID, start_step, income_penalty_amount] - shelter-overflow pool
+Temp_Dev_Sites=zeros(0,6); % [site_id, X, Y, capacity, start_step, end_step] - medium-term sheltering spaces (never a Build_Data row - see site_temp_dev_locations.m)
+Temp_Dev_Assign=zeros(0,2); % [agent_id, site_id]
+temp_dev_spawned=false; % one-time flag: sites open at shock_step+temp_dev_delay
+temp_dev_closed=false; % one-time flag: sites close at shock_step+temp_dev_delay+temp_dev_duration
 
 %% start running
 for i=1:steps
@@ -374,10 +443,6 @@ for i=1:steps
     sumdata(i).Wage_Change= Wage_Change;
     
     lost_jobs_B_ID =[];
-    % HH forced out of shelter this step by max_shelter_duration - reset
-    % here (not after the release_shelter call below) so the value it
-    % returns actually survives to the retry/exempt logic further down.
-    forced_release_hh=[];
 
     %% building movement - recovery, assets and work places
     if shock==1
@@ -398,15 +463,142 @@ for i=1:steps
         end      
         Work_places=new_works_after_recovery(Work_places,Build_Data,BI,average_wage,std_wage);
         if displaced_shelter==1 && ~isempty(Shelters)
-            [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, forced_release_hh] = ...
+            [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id] = ...
                 release_shelter(Build_Data, Individuals_data, HH_data, Shelters, Shelter_Assign,...
-                Shelter_Building_Routines, Building_routine_id, Assets, BI, i, max_shelter_duration);
+                Shelter_Building_Routines, Building_routine_id, Assets, BI, i);
         end
         if displaced_shelter==1 && ~isempty(Sheltered_Outside)
             [HH_data, Sheltered_Outside] = release_outside_shelter(HH_data, Assets, BI, Sheltered_Outside);
         end
+        if displaced_shelter==1 && ~isempty(Temp_Dev_Assign)
+            [Temp_Dev_Assign, ~] = release_temp_dev(Individuals_data, HH_data, Assets, BI, Temp_Dev_Assign);
+        end
     end
-    
+
+    %% medium-term sheltering: open temporary-development spaces
+    % One-time event, temp_dev_delay steps after the shock. A fixed count
+    % (n_temp_dev_sites) of abstract residential SPACES open - NOT
+    % buildings; no Build_Data row or distance-matrix entry is ever
+    % created for them, see site_temp_dev_locations.m. Combined capacity
+    % across all sites = temp_dev_capacity_frac of the total
+    % currently-sheltered population (immediate tier + out-of-city
+    % overflow), split evenly across the sites. Households currently in
+    % EITHER pool are combined into one candidate list, shuffled into
+    % random order (no priority between the two pools), and transferred
+    % in - greedily filling sites in that random order, up to capacity
+    % (not optimal bin-packing). Immediate-tier transfers free their old shelter
+    % building (reverts to its original usage once empty, same as
+    % release_shelter.m's normal path); out-of-city transfers get their
+    % commute-penalty income refunded (same amount deducted on entry).
+    % Anyone not transferred simply stays in whichever pool they were
+    % already in - no further cascade needed. Temp-dev residents are
+    % released the same way as any other shelter (see release_temp_dev.m
+    % above: original home recovered, or a new asset secured), plus the
+    % duration-based closure below.
+    if displaced_shelter==1 && shock==1 && ~temp_dev_spawned && i >= shock_step + temp_dev_delay
+        temp_dev_spawned = true;
+        site_xy = site_temp_dev_locations(Build_Data, destroyed_B, n_temp_dev_sites, temp_dev_site_coords);
+
+        n_immediate = size(Shelter_Assign,1);
+        n_outside = sum(ismember(Individuals_data(:,3), Sheltered_Outside(:,1)));
+        total_displaced = n_immediate + n_outside;
+        total_capacity = floor(temp_dev_capacity_frac * total_displaced);
+
+        if ~isempty(site_xy) && total_capacity>0 && (n_immediate>0 || n_outside>0)
+            n_sites_opened = size(site_xy,1);
+            per_site_capacity = floor(total_capacity / n_sites_opened);
+            site_ids = (1:n_sites_opened)';
+            Temp_Dev_Sites = [Temp_Dev_Sites; site_ids, site_xy, repmat(per_site_capacity,n_sites_opened,1), repmat(i,n_sites_opened,1), zeros(n_sites_opened,1)];
+
+            site_remaining = repmat(per_site_capacity, n_sites_opened, 1);
+            next_site = 1;
+
+            if isempty(Shelter_Assign)
+                immediate_hh = [];
+            else
+                immediate_hh = unique(Individuals_data(ismember(Individuals_data(:,1), Shelter_Assign(:,1)), 3));
+            end
+            outside_hh = Sheltered_Outside(:,1);
+            candidate_hh = [immediate_hh; outside_hh];
+            candidate_hh = candidate_hh(randperm(length(candidate_hh))); % random assignment order, no priority between the two pools
+
+            for h = 1:length(candidate_hh)
+                hh_id = candidate_hh(h);
+                hh_agents = Individuals_data(Individuals_data(:,3)==hh_id, 1);
+                n_needed = length(hh_agents);
+
+                while next_site <= n_sites_opened && site_remaining(next_site) < n_needed
+                    next_site = next_site + 1;
+                end
+                if next_site > n_sites_opened
+                    break % no more temp-dev capacity - remaining households stay where they already were
+                end
+
+                site_id = site_ids(next_site);
+
+                if ismember(hh_id, immediate_hh)
+                    % coming from the immediate tier - free their old shelter building
+                    old_b_ids = unique(Shelter_Assign(ismember(Shelter_Assign(:,1),hh_agents),2));
+                    Shelter_Assign(ismember(Shelter_Assign(:,1),hh_agents),:) = [];
+                    for ob = 1:length(old_b_ids)
+                        if ~any(Shelter_Assign(:,2)==old_b_ids(ob))
+                            sidx = find(Shelters(:,1)==old_b_ids(ob), 1);
+                            if ~isempty(sidx)
+                                Build_Data(Build_Data(:,1)==old_b_ids(ob),3) = Shelters(sidx,4);
+                                Shelters(sidx,3) = i;
+                                Shelters(sidx,:) = [];
+                            end
+                        end
+                    end
+                else
+                    % coming from the out-of-city overflow pool - refund the
+                    % commute penalty, same amount deducted on entry
+                    hh_row = find(HH_data(:,2)==hh_id, 1);
+                    os_row = find(Sheltered_Outside(:,1)==hh_id, 1);
+                    if ~isempty(hh_row) && ~isempty(os_row)
+                        HH_data(hh_row,6) = HH_data(hh_row,6) + Sheltered_Outside(os_row,3);
+                    end
+                    Sheltered_Outside(Sheltered_Outside(:,1)==hh_id,:) = [];
+                end
+
+                Temp_Dev_Assign = [Temp_Dev_Assign; [hh_agents, repmat(site_id, n_needed, 1)]];
+                site_remaining(next_site) = site_remaining(next_site) - n_needed;
+            end
+        end
+    end
+
+    %% medium-term sheltering: close temporary-development spaces
+    % One-time event, temp_dev_duration steps after the sites opened.
+    % Anyone still assigned is force-released into the out-of-city
+    % overflow pool (Sheltered_Outside) - same mechanics as the
+    % capacity-exhaustion overflow path above. Nothing is left behind:
+    % these were never Build_Data rows, so there's no building to revert
+    % or delete - the sites' own bookkeeping (Temp_Dev_Sites) is just
+    % stamped with an end step and Temp_Dev_Assign is cleared out.
+    if displaced_shelter==1 && temp_dev_spawned && ~temp_dev_closed && i >= shock_step + temp_dev_delay + temp_dev_duration
+        temp_dev_closed = true;
+        if ~isempty(Temp_Dev_Assign)
+            remaining_hh = unique(Individuals_data(ismember(Individuals_data(:,1), Temp_Dev_Assign(:,1)), 3));
+            for h = 1:length(remaining_hh)
+                hh_id = remaining_hh(h);
+                hh_row = find(HH_data(:,2)==hh_id, 1);
+                if isempty(hh_row)
+                    continue
+                end
+                hh_agents = Individuals_data(Individuals_data(:,3)==hh_id, 1);
+                Temp_Dev_Assign(ismember(Temp_Dev_Assign(:,1),hh_agents),:) = [];
+
+                penalty = outside_commute_penalty_pct * HH_data(hh_row,6);
+                HH_data(hh_row,6) = HH_data(hh_row,6) - penalty;
+                Sheltered_Outside = [Sheltered_Outside; hh_id, i, penalty];
+
+                a_idx = ismember(Building_routine_id(:,1), hh_agents);
+                Building_routine_id(a_idx, 4:end) = NaN;
+            end
+        end
+        Temp_Dev_Sites(Temp_Dev_Sites(:,6)==0, 6) = i; % stamp end step on whichever sites are still open
+    end
+
     %% damaged building list
 
     if shock == 1
@@ -450,7 +642,8 @@ for i=1:steps
         if displaced_shelter==1 && ~isempty(HH_destroyed)
             [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, unsheltered_agents] = ...
                 assign_shelter(Build_Data, Individuals_data, HH_destroyed, Shelters, Shelter_Assign,...
-                Shelter_Building_Routines, Building_routine_id, i, agents_per_sqm);
+                Shelter_Building_Routines, Building_routine_id, i, agents_per_sqm, public_bldg_usable_fraction, ...
+                restrict_public_shelters_to_schools, hotel_room_density, agents_per_room);
 
             % Shelter capacity exhausted: leftover displaced households are
             % "sheltered outside the city" instead of being deleted - see
@@ -486,20 +679,25 @@ for i=1:steps
     % HH still waiting in shelter after this step's releases/new
     % assignments above - these retry the within-SA search every step
     % (from their original SA/building, since HH_data still points there)
-    % until they find housing or their home recovers. forced_release_hh
-    % (set above by release_shelter.m) are NOT exempt from deletion below
-    % if this attempt fails - the duration cap means relocate-or-leave.
+    % until they find housing or their home recovers. No duration cap on
+    % either shelter pool - a household stays sheltered indefinitely until
+    % one of those two exits resolves it.
     if isempty(Shelter_Assign)
         still_sheltered_hh = [];
     else
         still_sheltered_hh = unique(Individuals_data(ismember(Individuals_data(:,1), Shelter_Assign(:,1)), 3));
     end
+    if isempty(Temp_Dev_Assign)
+        still_temp_dev_hh = [];
+    else
+        still_temp_dev_hh = unique(Individuals_data(ismember(Individuals_data(:,1), Temp_Dev_Assign(:,1)), 3));
+    end
 
     moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,2); % K=2, probability of moving within SA
-    % Sheltered_Outside HH retry the same cascade every step, exactly like
-    % still_sheltered_hh - "treated like migrants trying to find a new
-    % asset" (no duration cap on this pool, unlike the in-city shelter).
-    moving_HH=[moving_HH;HH_destroyed;still_sheltered_hh;forced_release_hh;Sheltered_Outside(:,1)];
+    % Sheltered_Outside and Temp_Dev_Assign HH retry the same cascade
+    % every step, exactly like still_sheltered_hh - "treated like
+    % migrants trying to find a new asset".
+    moving_HH=[moving_HH;HH_destroyed;still_sheltered_hh;Sheltered_Outside(:,1);still_temp_dev_hh];
     moving_HH=unique(moving_HH);
     if isempty(moving_HH)==0 % assign new asset for agent
         [HH_ID_left,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data]...
@@ -517,13 +715,9 @@ for i=1:steps
     end
 
 
-    % HH still sheltered (and not this step's forced-duration release) are
-    % exempt from deletion if this attempt failed - they stay in the
-    % shelter and retry next step. forced_release_hh HH are NOT exempt:
-    % the duration cap means this is their last attempt. Sheltered_Outside
-    % HH are always exempt - no duration cap on that pool.
-    exempt_sheltered = (ismember(HH_ID_left, still_sheltered_hh) & ~ismember(HH_ID_left, forced_release_hh)) ...
-        | ismember(HH_ID_left, Sheltered_Outside(:,1));
+    % HH still sheltered (any pool) are exempt from deletion if this
+    % attempt failed - they stay sheltered and retry next step.
+    exempt_sheltered = ismember(HH_ID_left, still_sheltered_hh) | ismember(HH_ID_left, Sheltered_Outside(:,1)) | ismember(HH_ID_left, still_temp_dev_hh);
     HH_ID_left = HH_ID_left(~exempt_sheltered);
     %saves HH that leave simulation before they are deleted
 
@@ -981,9 +1175,11 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             SA_IDLE SA_LOCAL SA_WORKING SA_JOBS SA_FIRST SA_SECOND SA_THIRD SA_FOURTH...
             SA_FIFTH SA_SIXTH SA_SEVENTH SA_EIGHTH SA_NINTH SA_TENTH SA_AREA...
             steps city run_timestamp...
-            displaced_shelter agents_per_sqm max_shelter_duration Shelters Shelter_Assign...
+            displaced_shelter agents_per_sqm public_bldg_usable_fraction restrict_public_shelters_to_schools...
+            hotel_room_density agents_per_room Shelters Shelter_Assign...
             subsidy_residents subsidy_businesses subsidy_amount subsidy_duration HH_track...
-            outside_commute_penalty_pct Sheltered_Outside
+            outside_commute_penalty_pct Sheltered_Outside temp_dev_delay temp_dev_duration...
+            n_temp_dev_sites temp_dev_capacity_frac temp_dev_site_coords Temp_Dev_Sites Temp_Dev_Assign
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk)]);
 save(full_file_name);
 end

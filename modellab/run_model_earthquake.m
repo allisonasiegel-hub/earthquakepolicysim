@@ -14,16 +14,29 @@
 %   - Sheltering: the ORIGINAL per-agent assign_shelter.m/release_shelter.m
 %     mechanism (NOT the elderly-project's SA/commercial-anchor siting
 %     rewrite assign_shelter_sa.m/release_shelter_capped.m), extended with:
-%       1. Retry/exit logic - a displaced household stays exempt from
-%          did_not_find_house deletion and retries the housing search
-%          every step for as long as any of its members are in
-%          Shelter_Assign, until it either finds housing or its home
-%          building recovers.
-%       2. Max shelter duration (max_shelter_duration) - a hard cap
-%          enforced inside release_shelter.m via each shelter building's
-%          own start step (Shelters(:,2)); households forced out this way
-%          get one final housing-search attempt and are NOT exempt from
-%          deletion if it fails.
+%       - Retry/exit logic - a displaced household stays exempt from
+%         did_not_find_house deletion and retries the housing search
+%         every step for as long as any of its members are in
+%         Shelter_Assign, until it either finds housing or its home
+%         building recovers. No max shelter duration/forced eviction - a
+%         household stays sheltered indefinitely until one of those two
+%         exits resolves it.
+%       - Hotels as a second "immediate" shelter-candidate pool alongside
+%         public buildings, with their own room-density-based capacity
+%         formula (hotel_room_density * agents_per_room * Area * floors)
+%         instead of the generic agents_per_sqm. hotel_room_density is
+%         calibrated per city (see identify_hotels_TVR.m for how Tiberias'
+%         value was derived from CBS hotel-room data); cities without
+%         hotel buildings tagged just have an empty hotel pool, harmless.
+%         A shelter building reverts to whatever it originally was
+%         (public=5 or hotel=7) on release, not always public.
+%       - Hotels are excluded from the routine (non-work) activity-
+%         location draw pool - see find_activity_location.m/
+%         find_activity_location_new_A.m. NOT YET DONE: hotels do not
+%         yet participate in the land-use/job-creation dynamics that
+%         treat usage 2-3 as "commercial" (stat_service.m,
+%         building_service_ratio.m, cal_bui_sa.m, etc.) - that threading
+%         is separate follow-up work, not part of this fork yet.
 %   - Subsidy logic matches run_model_eq.m's original flat-amount version
 %     (HH_subsidy.m, subsidy_residents/subsidy_amount/subsidy_duration,
 %     cal_bui_sa_subsidy/subsidy_businesses) - NOT the elderly-thesis
@@ -103,24 +116,31 @@ switch city
         commute_outside=0.778038196; % validated, in active use
         alfa=0.3; beta=0.8; lamda=0.95; delta=0.75; % Ashkelon-calibrated, validated
         JobsPerM_comm=0.007790361; % matches modellab\ASH22\model parameters.csv, validated
+        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     case 'Tiberias'
-        data='data_for_model_TVR'; % data ready (data_for_model_TVR.mat present)
+        % data_for_model_TVR_hotels (NOT the plain data_for_model_TVR) -
+        % identical except 39 buildings are tagged usage=7 (hotel) by
+        % identify_hotels_TVR.m. Drop-in replacement, safe default.
+        data='data_for_model_TVR_hotels';
         file=[fileparts(mfilename('fullpath')),'\TVR\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         commute_outside=0.778038196; % SMOKE-TEST PLACEHOLDER - copied from Ashkelon, UNVALIDATED for Tiberias
         alfa=0.3; beta=0.8; lamda=0.95; delta=0.75; % SMOKE-TEST PLACEHOLDER - copied from Ashkelon, UNVALIDATED for Tiberias
         JobsPerM_comm=0.008932703; % matches modellab\TVR\model parameters.csv
+        hotel_room_density=0.02128; % rooms per sqm floor-adjusted area - see identify_hotels_TVR.m
     case 'Jerusalem'
         data='data_for_model_JER2'; % TODO: no data_for_model_JER2.mat in modellab yet - run the data_allocation pipeline or copy it in
         file=[fileparts(mfilename('fullpath')),'\JER\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         commute_outside=NaN; % TODO
         alfa=NaN; beta=NaN; lamda=NaN; delta=NaN; % TODO
         JobsPerM_comm=0.0440838; % matches modellab\JER\model parameters.csv
+        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     case 'Arad'
         data='data_for_model_Arad'; % TODO: no data_for_model_Arad.mat in modellab yet - run the data_allocation pipeline or copy it in
         file=[fileparts(mfilename('fullpath')),'\Arad\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         commute_outside=NaN; % TODO
         alfa=NaN; beta=NaN; lamda=NaN; delta=NaN; % TODO
         JobsPerM_comm=0.03400486; % matches modellab\Arad\model parameters.csv
+        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     otherwise
         error('Unknown city "%s" - add a case for it to the city configuration block.', city);
 end
@@ -158,10 +178,26 @@ priority_recovery=0; % faster recovery of residential
 recovery_factor=2.5;
 displaced_shelter=1; % toggle: 0=off (baseline), 1=on - shelter policy of public turn to 99
 agents_per_sqm=0.2;
-% max_shelter_duration: hard cap (steps) on how long a household may stay
-% sheltered before being forced to relocate-or-leave. Placeholder value -
+% agents_per_room: hotel-shelter occupancy assumption (people per room),
+% used with hotel_room_density (city configuration block) to convert
+% estimated room counts into shelter agent capacity. Placeholder value -
 % not yet set through sensitivity testing.
-max_shelter_duration=120;
+agents_per_room=2;
+% public_bldg_usable_fraction: fraction of a public/school building's
+% gross floor area (Area*floors) that's actually usable shelter space -
+% accounts for hallways, offices, fixed-furniture rooms, upper floors
+% without elevator access, etc. Without this, agents_per_sqm alone
+% (~5 sqm/person, a reasonable Sphere-standard density) applied to 100%
+% of gross floor area badly overstates real capacity - for Tiberias,
+% total public capacity (80,113) otherwise exceeds the entire city
+% population (50,419). Placeholder value - not yet set through
+% sensitivity testing.
+public_bldg_usable_fraction=0.4;
+% restrict_public_shelters_to_schools: toggle - if true, only usage=8
+% (school) buildings are eligible for the public/school shelter tier
+% (excludes usage=5 generic public entirely). Lets "all public buildings"
+% vs. "schools only" be compared as different policy runs.
+restrict_public_shelters_to_schools=0;
 commercial_preservation=0;
 residential_preservation=0;
 
@@ -348,10 +384,6 @@ for i=1:steps
     sumdata(i).Wage_Change= Wage_Change;
 
     lost_jobs_B_ID =[];
-    % HH forced out of shelter this step by max_shelter_duration - reset
-    % here (not after the release_shelter call below) so the value it
-    % returns actually survives to the retry/exempt logic further down.
-    forced_release_hh=[];
 
     %% building movement - recovery, assets and work places
     if shock==1
@@ -372,9 +404,9 @@ for i=1:steps
         end
         Work_places=new_works_after_recovery(Work_places,Build_Data,BI,average_wage,std_wage);
         if displaced_shelter==1 && ~isempty(Shelters)
-            [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, forced_release_hh] = ...
+            [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id] = ...
                 release_shelter(Build_Data, Individuals_data, HH_data, Shelters, Shelter_Assign,...
-                Shelter_Building_Routines, Building_routine_id, Assets, BI, i, max_shelter_duration);
+                Shelter_Building_Routines, Building_routine_id, Assets, BI, i);
         end
     end
 
@@ -421,7 +453,8 @@ for i=1:steps
         if displaced_shelter==1 && ~isempty(HH_destroyed)
             [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id] = ...
                 assign_shelter(Build_Data, Individuals_data, HH_destroyed, Shelters, Shelter_Assign,...
-                Shelter_Building_Routines, Building_routine_id, i, agents_per_sqm);
+                Shelter_Building_Routines, Building_routine_id, i, agents_per_sqm, public_bldg_usable_fraction, ...
+                restrict_public_shelters_to_schools, hotel_room_density, agents_per_room);
         end
     end
 
@@ -430,9 +463,9 @@ for i=1:steps
     % HH still waiting in shelter after this step's releases/new
     % assignments above - these retry the within-SA search every step
     % (from their original SA/building, since HH_data still points there)
-    % until they find housing or their home recovers. forced_release_hh
-    % (set above by release_shelter.m) are NOT exempt from deletion below
-    % if this attempt fails - the duration cap means relocate-or-leave.
+    % until they find housing or their home recovers. No duration cap -
+    % a household stays sheltered indefinitely until one of those two
+    % exits resolves it.
     if isempty(Shelter_Assign)
         still_sheltered_hh = [];
     else
@@ -440,7 +473,7 @@ for i=1:steps
     end
 
     moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,2); % K=2, probability of moving within SA
-    moving_HH=[moving_HH;HH_destroyed;still_sheltered_hh;forced_release_hh];
+    moving_HH=[moving_HH;HH_destroyed;still_sheltered_hh];
     moving_HH=unique(moving_HH);
     if isempty(moving_HH)==0 % assign new asset for agent
         [HH_ID_left,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data]...
@@ -458,11 +491,9 @@ for i=1:steps
     end
 
 
-    % HH still sheltered (and not this step's forced-duration release) are
-    % exempt from deletion if this attempt failed - they stay in the
-    % shelter and retry next step. forced_release_hh HH are NOT exempt:
-    % the duration cap means this is their last attempt.
-    exempt_sheltered = ismember(HH_ID_left, still_sheltered_hh) & ~ismember(HH_ID_left, forced_release_hh);
+    % HH still sheltered are exempt from deletion if this attempt failed -
+    % they stay in the shelter and retry next step.
+    exempt_sheltered = ismember(HH_ID_left, still_sheltered_hh);
     HH_ID_left = HH_ID_left(~exempt_sheltered);
     %saves HH that leave simulation before they are deleted
 
@@ -910,7 +941,8 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             SA_IDLE SA_LOCAL SA_WORKING SA_JOBS SA_FIRST SA_SECOND SA_THIRD SA_FOURTH...
             SA_FIFTH SA_SIXTH SA_SEVENTH SA_EIGHTH SA_NINTH SA_TENTH SA_AREA...
             steps city run_timestamp...
-            displaced_shelter agents_per_sqm max_shelter_duration Shelters Shelter_Assign...
+            displaced_shelter agents_per_sqm public_bldg_usable_fraction restrict_public_shelters_to_schools...
+            hotel_room_density agents_per_room Shelters Shelter_Assign...
             subsidy_residents subsidy_businesses subsidy_amount subsidy_duration HH_track
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk)]);
 save(full_file_name);

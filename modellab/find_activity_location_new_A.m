@@ -50,6 +50,8 @@ last_location=[X(:,2),Y(:,2)];
 %% all activities locations ; same as find_activity_location
 usage=unique(Build_Data(:,3)); % building usage list with no repetitons
 usage(usage==0)=[]; % remove zero members
+usage(usage==7)=[]; % hotels are not a plausible routine (non-work) activity destination
+usage(usage==99)=[]; % buildings currently in use as a shelter (transient marker, not a real land-use) should never be a routine activity destination
 u=max(Individuals_data(:,20)); % max activities 
 xx=3; % col num
 for i=1:u
@@ -92,8 +94,7 @@ for i=1:u
     lock=Build_Data(:,24);
     S_data=[Build_Data(:,[1,3:6]),S,lock];
     S_data=S_data(S_data(:,6)>0 | isnan(S_data(:,6)),:);
-    Usage(Usage>6)=1;
-    
+
     SA=SA_data(SA,1); % whole row for index with max score
     u_sa=unique(SA(:,1)); % remove duplicate SA 
     u_usage=unique(Usage); % remove duplicate usage
