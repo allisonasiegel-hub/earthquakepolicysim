@@ -5,7 +5,7 @@ routine=[];
 total_families=0;
 for i=1:size(sas_data,1)
     free_assets=sum(Assets(Assets(:,1)==sas_data(i,1),11)==0); % unoccupied assets within SA count
-    x=sas_data(i,5)/365; % 5 - 'inOutRatio'
+    x=sas_data(i,5)/52; % 5 - 'inOutRatio' - annual rate over 52 weekly steps (was /365 for daily steps)
     families=round(normrnd(x,x/3)*free_assets); % random*assets
 
     if families>0 
