@@ -24,7 +24,7 @@ below since they didn't exist when this audit was first written.
 | 7 | `run_model_earthquake_shelteroverflow.m` | `lu_update_every` | "every step" — meaning shifts silently | unchanged (=1) | Deferred - explicit decision, not automatic |
 | 8 | `run_model_earthquake_shelteroverflow.m` | `mod(i,30)==0` (SA/price update block) | ~1 month cadence | `mod(i,4)==0` | **Done** |
 | 9 | `find_job_1.m` | `T = 1-exp(-time/30)` | ~1 month, inside an exponential | `/(30/7)` ≈ 4.29 | **Done** — curve shape not separately re-verified numerically |
-| 10 | `run_model_earthquake_shelteroverflow.m` | `RECOVERY = 0.01` per step | full recovery ≈100 days | `0.07` (still ≈100 steps, now weeks) | **Done** |
+| 10 | `run_model_earthquake_shelteroverflow.m` | `RECOVERY = 0.01` per step | full recovery ≈100 days (deterministic, every building identical) | **Superseded** - mechanism replaced entirely with per-building weekly recovery probability calibrated from real data (31.35% of residential housing recovered within 1 year) - see decision log | **Done (superseded)** |
 | 11 | `run_model_earthquake_shelteroverflow.m` | `alfa/beta/lamda/delta` wage adjustment (`income_ratio`) | compounds every step | unchanged | **Tested, accepted as-is** — see decision log |
 | 12 | `run_model_earthquake_shelteroverflow.m` | Labor-force entry probability (driven by `income_ratio`) | downstream of #11 | unchanged | **Tested, accepted as-is** — see decision log |
 | 13 | `monthly_ass_cost.m` (called every step) | "monthly" cost-of-life recomputed every step | already mismatched today | unchanged | No fix needed — weekly steps make this less wrong |
@@ -68,3 +68,19 @@ below since they didn't exist when this audit was first written.
   initial post-shock adjustment is slower in calendar time. Revisit if a
   specific run cares about short-term (first few weeks) dynamics.
 - Item 13 requires no action.
+- Item 10 (RECOVERY) was later superseded: the deterministic shared-
+  countdown mechanism (every destroyed building recovers at the exact
+  same step count, since size cancels out of the threshold formula) can't
+  represent a real recovery-rate statistic at all, since it produces a
+  step function (0% recovered, then 100% all at once) rather than a
+  curve. Replaced with a per-building weekly Bernoulli recovery draw,
+  calibrated from real data (31.35% of residential housing recovered
+  within 1 year): `RECOVERY = 1-(1-0.3135)^(1/52) ≈ 0.00721`. Applied
+  uniformly to all building types (explicit decision, not residential-
+  only) via the existing `priority_recovery`/`recovery_factor` toggle
+  path, which still works for future differentiated-recovery scenarios
+  but is inactive by default. `destroyed_B(:,2)` (the old progress
+  accumulator) is now unused/vestigial - left in place since
+  `destroyed_B(:,3)` (size) is still read elsewhere (e.g.
+  `site_temp_dev_locations.m`) and removing a column would ripple through
+  every caller unnecessarily.
