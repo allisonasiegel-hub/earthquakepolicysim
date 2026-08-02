@@ -1,31 +1,70 @@
 # Day → Week Step Rescaling Audit
 
-`run_model_earthquake.m` and its called functions — Ashkelon ABM
-
-We're considering changing the model so each step represents a week instead of a day. This identifies every place a probability, rate, or duration is currently calibrated assuming a daily step. **Nothing has been changed yet** — identification only.
+Originally audited against `run_model_earthquake.m`. **Implemented** against
+`run_model_earthquake_shelteroverflow.m` (the current main run script) - a
+step there now represents a week, not a day. `migration_19.m` and
+`find_job_1.m` are shared by both scripts, so rescaling them affects
+`run_model_earthquake.m` too (deliberate - see decision log below).
+`max_shelter_duration` (original item 4) no longer exists - that mechanism
+was removed entirely in an earlier session. Two new day-calibrated
+constants added since the original audit (`temp_dev_delay`,
+`temp_dev_duration`, from the medium-term sheltering tier) are included
+below since they didn't exist when this audit was first written.
 
 ## Findings
 
-| # | Location | Constant / formula | Current (daily) | Fix |
-|---|---|---|---|---|
-| 1 | `migration_19.m:8` | `x = sas_data(i,5)/365` (inOutRatio) | annual rate → daily | `/52` instead of `/365` |
-| 2 | `who_is_moving.m:7,12`, fed by `read_sas_data.m` | `intraSAProb`/`intraYeshuvProb` vs. per-step random draw | daily move probability | `p_week = 1-(1-p_day)^7` — confirm with data source first |
-| 3 | `run_model_earthquake.m:137` | `subsidy_duration = 60` | ~2 months | ~9 |
-| 4 | `run_model_earthquake.m:145` | `max_shelter_duration = 120` | ~4 months | ~17 |
-| 5 | `run_model_earthquake.m:465-467` (+~705) | `VISITS` rolling window `>31` | ~1 month | ~4-5 |
-| 6 | `run_model_earthquake.m:469` | `lu_warmup = 30` | ~1 month, coupled to #5 | ~4-5 |
-| 7 | `run_model_earthquake.m:470` | `lu_update_every = 1` | "every step" — meaning shifts silently | explicit decision, not automatic |
-| 8 | `run_model_earthquake.m:807` | `mod(i,30)==0` (SA/price update block) | ~1 month cadence | `mod(i,4)==0` |
-| 9 | `find_job_1.m:44` | `T = 1-exp(-time/30)` | ~1 month, inside an exponential | ~4-5, verify curve shape numerically |
-| 10 | `run_model_earthquake.m:128,342,346,348` | `RECOVERY = 0.01` per step | full recovery ≈100 days | ×7 → `0.07` |
-| 11 | `run_model_earthquake.m:735-760` | `alfa/beta/lamda/delta` wage adjustment (`income_ratio`) | compounds every step | **no scalar fix — needs recalibration** |
-| 12 | `run_model_earthquake.m:763-773` | Labor-force entry probability (driven by `income_ratio`) | downstream of #11 | re-tune together with #11 |
-| 13 | `monthly_ass_cost.m` (called every step) | "monthly" cost-of-life recomputed every step | already mismatched today | no fix needed — weekly steps make this less wrong |
+| # | Location | Constant / formula | Was (daily) | Now (weekly) | Status |
+|---|---|---|---|---|---|
+| 1 | `migration_19.m` | `x = sas_data(i,5)/365` (inOutRatio) | annual rate → daily | `/52` | **Done** |
+| 2 | `read_sas_data.m` (feeds `who_is_moving.m` K=2/K=3) | `intraSAProb`/`intraYeshuvProb` vs. per-step random draw | daily move probability (confirmed) | `p_week = 1-(1-p_day)^7`, applied at load time to cols 2-3 | **Done** |
+| 3 | `run_model_earthquake_shelteroverflow.m` | `subsidy_duration` | 60 (~2 months) | 9 | **Done** |
+| 4 | ~~`max_shelter_duration`~~ | — | — | — | Removed (mechanism deleted, N/A) |
+| 5 | `run_model_earthquake_shelteroverflow.m` (two occurrences) | `VISITS` rolling window `>31` | ~1 month | `>5` (4-step window + ID col) | **Done** |
+| 6 | `run_model_earthquake_shelteroverflow.m` | `lu_warmup` | 30 (~1 month), coupled to #5 | 4 | **Done** |
+| 7 | `run_model_earthquake_shelteroverflow.m` | `lu_update_every` | "every step" — meaning shifts silently | unchanged (=1) | Deferred - explicit decision, not automatic |
+| 8 | `run_model_earthquake_shelteroverflow.m` | `mod(i,30)==0` (SA/price update block) | ~1 month cadence | `mod(i,4)==0` | **Done** |
+| 9 | `find_job_1.m` | `T = 1-exp(-time/30)` | ~1 month, inside an exponential | `/(30/7)` ≈ 4.29 | **Done** — curve shape not separately re-verified numerically |
+| 10 | `run_model_earthquake_shelteroverflow.m` | `RECOVERY = 0.01` per step | full recovery ≈100 days | `0.07` (still ≈100 steps, now weeks) | **Done** |
+| 11 | `run_model_earthquake_shelteroverflow.m` | `alfa/beta/lamda/delta` wage adjustment (`income_ratio`) | compounds every step | unchanged | **Tested, accepted as-is** — see decision log |
+| 12 | `run_model_earthquake_shelteroverflow.m` | Labor-force entry probability (driven by `income_ratio`) | downstream of #11 | unchanged | **Tested, accepted as-is** — see decision log |
+| 13 | `monthly_ass_cost.m` (called every step) | "monthly" cost-of-life recomputed every step | already mismatched today | unchanged | No fix needed — weekly steps make this less wrong |
+| 14 | `run_model_earthquake_shelteroverflow.m` | `temp_dev_delay` | 14 (2 weeks) | 2 | **Done** |
+| 15 | `run_model_earthquake_shelteroverflow.m` | `temp_dev_duration` | 180 (~6 months) | 26 | **Done** |
 
-## Notes
+## Decision log
 
-- Items 1, 3–6, 8–10 are mechanical divide/multiply-by-7 rescales — low risk.
-- Item 2 is mechanical but should be confirmed against the source spreadsheet (are those columns really daily?) before applying the conversion.
-- Item 7 needs an explicit decision, not an automatic fix.
-- Items 11–12 (wage adjustment) are the one place with real uncertainty — no formula swap will do it; needs empirical recalibration (e.g. compare `average_wage` trajectory over the same real 30 days, old vs. new step size).
+- Items 1, 3, 5, 6, 8-10, 14-15 were mechanical divide/multiply-by-7
+  rescales, applied directly.
+- `migration_19.m`/`find_job_1.m` are shared with `run_model_earthquake.m`
+  (not just the overflow script) - explicitly decided to rescale them
+  anyway rather than fork per-script copies, since both scripts are
+  intended to run on the same weekly step size going forward.
+- Item 2: confirmed the source columns are daily probabilities, applied
+  the conversion in `read_sas_data.m` (also shared with
+  `run_model_earthquake.m` - same rescale-shared-functions decision as
+  above). `interYeshuvProb` (col 4) is loaded but never actually used
+  anywhere in the codebase, so left unconverted.
+- Item 7 (`lu_update_every`) is a policy choice about update cadence, not
+  a mechanical unit conversion - left as-is pending an explicit decision.
+- Items 11-12 (wage adjustment): empirically tested rather than
+  analytically fixed, since `income_ratio` compounds every step and
+  there's no scalar conversion for that. Ran Ashkelon, no shock, 90 real
+  days, 4 replicates each of a daily-step config (reverted temporarily via
+  `git stash` to the pre-rescale state) and the current weekly-step config
+  (13 steps), comparing `average_wage` trajectories (`sumdata.avgWage`,
+  now kept through `clearvars` - see the keep-list) at matched real-time
+  checkpoints:
+    - Both start identical (8,897.66 - same initial data).
+    - Weeks 1-2: large divergence (~7.6%) - the daily config's initial
+      wage-settling transient completes within ~2-3 real days, while the
+      weekly config takes ~2-3 real *weeks* for the same number of
+      `income_ratio` applications, since that adjustment only fires once
+      per step regardless of how much real time the step represents.
+    - Week 3 onward: divergence drops to ~0.3-1.1% and stays roughly flat
+      through day 90 - no runaway drift. Replicate-to-replicate noise
+      alone is ~0.1-0.3%, so this residual gap is real but small.
+  Decision: accepted as-is, not recalibrated. The long-run wage level
+  isn't meaningfully distorted by the switch; only the speed of the
+  initial post-shock adjustment is slower in calendar time. Revisit if a
+  specific run cares about short-term (first few weeks) dynamics.
 - Item 13 requires no action.

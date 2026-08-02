@@ -41,7 +41,7 @@ for i=1:size(ind,1)
         F_wp=find(Work_places(:,7)==0); 
 
     else
-        T=1-exp((-1*ind(i,22))/30); % T = 1-e^(-('time looking for job')/30)
+        T=1-exp((-1*ind(i,22))/(30/7)); % T = 1-e^(-('time looking for job')/(30/7)) - was /30 for daily steps, now ~4.29 weeks
         RRR=rand(1);
         RRR1=rand(1);
         if T>RRR

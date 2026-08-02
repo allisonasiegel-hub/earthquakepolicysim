@@ -178,7 +178,12 @@ if ~exist('steps','var'); steps=200; end % allow a sweep driver to pre-set this 
 % table passed to earth_quake() instead, see the shock block below)
 shock=0;
 if ~exist('shock_step','var'); shock_step=900; end % allow a sweep/test driver to pre-set this
-RECOVERY = 0.01;
+% Steps represent WEEKS, not days (see day_to_week_step_rescaling_audit.md)
+% - every duration/rate constant below is calibrated accordingly. shock_step
+% and steps itself are run-length choices, not something this rescale
+% changes automatically - a caller setting shock_step=40 now means 40
+% weeks, not 40 days.
+RECOVERY = 0.07; % was 0.01/day -> full recovery still ~100 steps, now ~100 weeks
 %% Polocies
 % Subsidy logic matches run_model_eq.m (flat amount via HH_subsidy.m) -
 % NOT the elderly-thesis percentage/elderly-premium version
@@ -187,7 +192,7 @@ RECOVERY = 0.01;
 subsidy_businesses=0; % help business during
 subsidy_residents=0; % toggle: 0=off (baseline), 1=on
 subsidy_amount=1000;
-subsidy_duration=60;
+subsidy_duration=9; % was 60 days (~2 months) -> ~9 weeks
 priority_recovery=0; % faster recovery of residential
 recovery_factor=2.5;
 displaced_shelter=1; % toggle: 0=off (baseline), 1=on - shelter policy of public turn to 99
@@ -224,9 +229,9 @@ outside_commute_penalty_pct=0.15;
 % in Temp_Dev_Sites/Temp_Dev_Assign (initialized below, near Shelters).
 % temp_dev_delay: steps after shock_step before these spaces open and
 % pull households in from the immediate tier and the out-of-city overflow
-% pool - see the transfer block below the main shock handling. 14 steps ~
-% 2 weeks at the model's current daily step resolution.
-temp_dev_delay=14;
+% pool - see the transfer block below the main shock handling. 2 steps =
+% 2 weeks at the model's current weekly step resolution.
+temp_dev_delay=2; % was 14 days (2 weeks) -> 2 weeks
 n_temp_dev_sites=3; % fixed count - not derived from the destroyed-building set
 % temp_dev_capacity_frac: combined capacity across ALL sites = this
 % fraction of the total currently-sheltered population (immediate tier +
@@ -238,10 +243,10 @@ temp_dev_capacity_frac=0.75;
 % temp_dev_site_coords: optional user-supplied [X,Y] real-world staging
 % locations, one row per site (n_temp_dev_sites x 2). Leave empty to fall
 % back to a data-driven siting proxy (see site_temp_dev_locations.m) -
-% ranks SAs by total destroyed-residential floor area and anchors each
-% site at the largest still-standing building's location in one of the
-% top-damaged SAs, purely as a real-world location reference (no building
-% or distance-matrix row is created from it).
+% ranks SAs by total destroyed floor area (any usage type) and anchors
+% each site at the largest still-standing building's location in one of
+% the top-damaged SAs, purely as a real-world location reference (no
+% building or distance-matrix row is created from it).
 temp_dev_site_coords=[];
 % temp_dev_duration: steps a temp-dev space stays open once it spawns,
 % per the "exist for a defined period of time" requirement. Once elapsed,
@@ -249,9 +254,9 @@ temp_dev_site_coords=[];
 % overflow pool (Sheltered_Outside) - same mechanics as the existing
 % capacity-exhaustion overflow path - and the sites' bookkeeping is
 % closed out; nothing is left behind (no Build_Data row existed to begin
-% with). Placeholder value (~6 months at daily resolution) - not yet set
-% through sensitivity testing.
-temp_dev_duration=180;
+% with). Placeholder value (~6 months) - not yet set through sensitivity
+% testing.
+temp_dev_duration=26; % was 180 days (~6 months) -> ~26 weeks
 commercial_preservation=0;
 residential_preservation=0;
 
@@ -733,11 +738,11 @@ for i=1:steps
     visit_volume=cal_visits(Building_routine_id,Build_Distance_matrix_400); % number of visits per building by agents
     VISITS=[VISITS,visit_volume(:,2)]; % new visits count col every iteration
 
-    if size(VISITS,2) > 31
-        VISITS(:,2)=[]; % keep rolling 30-step window
+    if size(VISITS,2) > 5
+        VISITS(:,2)=[]; % keep rolling 4-step (~1 month) window (+1 for the ID col) - was >31 daily steps
     end
 
-    if ~exist('lu_warmup','var'); lu_warmup=30; end % steps before land-use/business updates start
+    if ~exist('lu_warmup','var'); lu_warmup=4; end % steps before land-use/business updates start - was 30 daily steps (~1 month)
     if ~exist('lu_update_every','var'); lu_update_every=1; end % run every Nth step after warmup (raise to speed up a test run)
 
     if i>lu_warmup && mod(i,lu_update_every)==0
@@ -973,8 +978,8 @@ for i=1:steps
                 WP(:,8)=N; % set 'salary'
                 Work_places=[Work_places;WP]; % append rows
             end
-            if size(VISITS, 2) > 31
-                VISITS(:,2:end-1)=VISITS(:,3:end); % Shift columns 3 to 30 left
+            if size(VISITS, 2) > 5
+                VISITS(:,2:end-1)=VISITS(:,3:end); % Shift columns left - was >31 daily steps, now 4-step (~1 month) window
                 VISITS(:,end)=[]; % Delete the last column
             end
         end
@@ -1085,7 +1090,7 @@ for i=1:steps
         new_A(:,4)=0;
     end
     new_A;
-    if mod(i,30)==0
+    if mod(i,4)==0 % was mod(i,30) daily steps (~1 month cadence)
         for g=1:length(g_sa) % unique SA ID ; next step calculations
             SA_PRICE(g,i+1)=nanmean(Assets(Assets(:,1)==g_sa(g),5)); % mean 'price M' 
             SA_HOUSE(g,i+1)=nanmean(Assets(ismember(Assets(:, 2),Build_Data(Build_Data(:,3)==1 | Build_Data(:,3)==2,1)) & Assets(:,1)==g_sa(g), 5));
@@ -1179,7 +1184,8 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             hotel_room_density agents_per_room Shelters Shelter_Assign...
             subsidy_residents subsidy_businesses subsidy_amount subsidy_duration HH_track...
             outside_commute_penalty_pct Sheltered_Outside temp_dev_delay temp_dev_duration...
-            n_temp_dev_sites temp_dev_capacity_frac temp_dev_site_coords Temp_Dev_Sites Temp_Dev_Assign
+            n_temp_dev_sites temp_dev_capacity_frac temp_dev_site_coords Temp_Dev_Sites Temp_Dev_Assign...
+            sumdata
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk)]);
 save(full_file_name);
 end
