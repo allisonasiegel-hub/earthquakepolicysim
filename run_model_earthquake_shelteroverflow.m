@@ -183,7 +183,15 @@ if ~exist('shock_step','var'); shock_step=900; end % allow a sweep/test driver t
 % and steps itself are run-length choices, not something this rescale
 % changes automatically - a caller setting shock_step=40 now means 40
 % weeks, not 40 days.
-RECOVERY = 0.07; % was 0.01/day -> full recovery still ~100 steps, now ~100 weeks
+% RECOVERY: weekly per-building probability of recovering (see the
+% probabilistic recovery block below - replaces the old deterministic
+% shared-countdown mechanism entirely, not just a /7 rescale). Derived
+% from real reconstruction-timeline data: 31.35% of residential housing
+% recovered within 1 year (52 weeks) on average -> solve
+% 1-(1-p)^52 = 0.3135 for p. Applied uniformly to all building types
+% (not just residential) per explicit decision - see
+% day_to_week_step_rescaling_audit.md.
+RECOVERY = 1 - (1-0.3135)^(1/52);
 %% Polocies
 % Subsidy logic matches run_model_eq.m (flat amount via HH_subsidy.m) -
 % NOT the elderly-thesis percentage/elderly-premium version
@@ -451,15 +459,23 @@ for i=1:steps
 
     %% building movement - recovery, assets and work places
     if shock==1
-        recovery_rate=RECOVERY*ones(size(destroyed_B,1),1);    
+        % Probabilistic per-building weekly recovery (replaces the old
+        % deterministic shared-countdown mechanism, where every destroyed
+        % building recovered at exactly the same step count regardless of
+        % size - see day_to_week_step_rescaling_audit.md). Each still-
+        % destroyed building gets an independent Bernoulli draw every
+        % step with probability RECOVERY, memoryless (no accumulated
+        % "progress" - destroyed_B(:,2) is no longer used, kept as a
+        % vestigial column since destroyed_B(:,3) [size] is still read
+        % elsewhere, e.g. site_temp_dev_locations.m).
+        recovery_prob=RECOVERY*ones(size(destroyed_B,1),1);
         if priority_recovery==1
             [~, idx_in_build]=ismember(destroyed_B(:,1),Build_Data(:,1));
-            usg=Build_Data(idx_in_build,3);          
-            recovery_rate(usg==1)=RECOVERY*recovery_factor; % priority for residential
-        end    
-        destroyed_B(:,2)=destroyed_B(:,2)+recovery_rate.*destroyed_B(:,3);    
-        f=destroyed_B(:,2)>=destroyed_B(:,3);
-        BI=destroyed_B(f,1); 
+            usg=Build_Data(idx_in_build,3);
+            recovery_prob(usg==1)=min(RECOVERY*recovery_factor,1); % priority for residential, clamped to a valid probability
+        end
+        f=rand(size(destroyed_B,1),1) < recovery_prob;
+        BI=destroyed_B(f,1);
         destroyed_B(f,:)=[]; % remove all recovered
         if size(bad_Assets,1)>0 % bad assets remaining 
             loca=ismember(bad_Assets(:,2),BI); % indexes of recovered
@@ -1185,7 +1201,7 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             subsidy_residents subsidy_businesses subsidy_amount subsidy_duration HH_track...
             outside_commute_penalty_pct Sheltered_Outside temp_dev_delay temp_dev_duration...
             n_temp_dev_sites temp_dev_capacity_frac temp_dev_site_coords Temp_Dev_Sites Temp_Dev_Assign...
-            sumdata
+            sumdata destroyed_B RECOVERY
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk)]);
 save(full_file_name);
 end
