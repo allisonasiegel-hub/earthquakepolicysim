@@ -11,6 +11,26 @@ for j=2:size(sa_data,2)
     a=isnan(sa_data(:,j));
     sa_data(a,j)=M;
 end
+
+%% derive missing metro-zone commuting shares (comm31/comm34/comm99)
+% comm31 and comm34 come out all-NaN for SAs already inside metro zone 31
+% (the census extract has no transition data for them, so the mean-fill
+% above can't help either). comm99 = share working OUTSIDE the locality
+% is the only populated column of the three. comm31 = share working
+% WITHIN the locality, i.e. its complement; commuting to the other metro
+% zone (comm34) has no data for this region, so it defaults to 0. Values
+% are fractions (0-1), not percentages.
+c31=find(strcmp(sa_data_P(1,:),'comm31'),1);
+c34=find(strcmp(sa_data_P(1,:),'comm34'),1);
+c99=find(strcmp(sa_data_P(1,:),'comm99'),1);
+if ~isempty(c31) && ~isempty(c99)
+    a=isnan(sa_data(:,c31));
+    sa_data(a,c31)=1-sa_data(a,c99);
+end
+if ~isempty(c34)
+    sa_data(isnan(sa_data(:,c34)),c34)=0;
+end
+
 %% find working stats
 u=unique(Build_Data(:,4));
 locA=ismember(sa_data(:,1),u);

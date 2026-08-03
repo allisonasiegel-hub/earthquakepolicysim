@@ -7,8 +7,7 @@
 %   - Shock delivery: one-time earth_quake() trigger (same pattern as the
 %     original run_model_eq.m).
 %   - Sheltering: the ORIGINAL per-agent assign_shelter.m/release_shelter.m
-%     mechanism (NOT the elderly-project's SA/commercial-anchor siting
-%     rewrite assign_shelter_sa.m/release_shelter_capped.m), extended with
+%     mechanism , extended with
 %     retry/exit logic (no max duration - see run_model_earthquake.m's
 %     header for the full description) and hotels as a second "immediate"
 %     shelter-candidate pool alongside public buildings, with their own
@@ -18,15 +17,9 @@
 %     calibrated. Hotels are excluded from the routine activity-location
 %     draw pool but do NOT yet participate in land-use/job-creation
 %     dynamics (separate follow-up work).
-%   - Aligned to the colleague-updated baseline versions of
-%     who_is_moving.m, find_new_house_same_stat.m, find_new_house_yeshuv.m,
-%     find_new_house_sa_score.m, pref_hh.m, SA_score_old.m, and
-%     migration_19.m - no wservice/eld_movef/svc_filter, no Asset_Avail,
-%     no HH_MOVE_TRACK (thesis-only, not used in this project). The
-%     find_new_house_sa_score.m SA-score bug fix is re-applied on top of
-%     the colleague's current version. Subsidy logic matches
-%     run_model_eq.m's flat-amount version; no elderly/displacement
-%     metric tracking.
+%   -  The find_new_house_sa_score.m SA-score bug fix is applied
+%      . Subsidy logic matches
+%     run_model_eq.m's flat-amount version;
 %
 % NEW IN THIS FORK - shelter overflow ("sheltered outside the city"):
 %   When assign_shelter.m runs out of available public buildings
@@ -59,7 +52,7 @@
 %        at exit - a simplification of "exclusion from the normal D_work
 %        preference term with a fixed penalty substituted" per the
 %        handoff, chosen to avoid touching pref_hh.m/SA_score_old.m
-%        (shared with the elderly-thesis project).
+%
 %   - Multi-city support: a `city` configuration block (top of the loop)
 %     picks the data file, folder, and calibration constants for the
 %     selected city. Set `city` (or let a sweep/batch driver pre-set it)
@@ -85,6 +78,17 @@ tic
 % from clobbering each other run-to-run (kk alone only distinguishes
 % replicates within a single run).
 run_timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+% run_uid: uniquely identifies THIS MATLAB process (same fix as
+% modelthesis/run_model_earthquake.m) - run_timestamp alone is only
+% second-resolution and shared for the whole script invocation, so two
+% `matlab -batch` processes launched concurrently (e.g. running a
+% parameter sweep or several replicates in parallel) can land on the
+% exact same run_timestamp+kk and silently overwrite each other's output
+% .mat files. Defaults to the OS process ID (unique across concurrently
+% running processes) - lets multiple runs of this script execute at once
+% (separate `matlab -batch` invocations, or a parfor-based sweep driver)
+% without output collisions.
+if ~exist('run_uid','var'); run_uid=sprintf('pid%d', feature('getpid')); end
 % n_sims: outer replicate count. Only the LAST kk's outputs survive for a
 % sweep caller (run_sweep_setting captures post-clearvars state), so sweep
 % drivers set n_sims=1 to avoid paying for a discarded first replicate.
@@ -115,17 +119,7 @@ if ~exist('city','var'); city='Ashkelon'; end
 switch city
     case 'Ashkelon'
         data='data_for_model_Ash2'; % data ready
-        % file points at testingcodechanges, NOT modellab\ASH22 - ASH22's
-        % sas_national.xlsx is a different, incompatible 5-column
-        % pre-summarized table (statID/intraSAProb/intraYeshuvProb/
-        % interYeshuvProb/inOutRatio), not the raw 15-column layout
-        % read_sas_data.m expects by column position (11-15). Verified
-        % testingcodechanges\sas_national.xlsx is the correct/working
-        % layout. JobsPerM_comm is hardcoded below instead of read from
-        % [file,'model parameters.csv'] for the same reason - that file
-        % isn't in testingcodechanges, and no single folder currently has
-        % both a compatible sas_national.xlsx AND model parameters.csv
-        % for Ashkelon.
+        % 
         file='C:\Users\allis\Documents\MATLAB\testingcodechanges\';
         commute_outside=0.778038196; % validated, in active use
         alfa=0.3; beta=0.8; lamda=0.95; delta=0.75; % Ashkelon-calibrated, validated
@@ -173,8 +167,7 @@ comm_policy=0;
 min_sal = 5000; % min salary according to BTL in 2017
 sims=30;
 if ~exist('steps','var'); steps=200; end % allow a sweep driver to pre-set this for faster test runs
-% (hits_ratio/total_hits removed - those were rocket_attack2's iterative
-% wave-count controls; earthquake severity comes from the per-SA damage
+% earthquake severity comes from the per-SA damage
 % table passed to earth_quake() instead, see the shock block below)
 shock=0;
 if ~exist('shock_step','var'); shock_step=900; end % allow a sweep/test driver to pre-set this
@@ -411,7 +404,15 @@ for g=1:length(g_sa)
     SA_RESIDENT(g,1)=sum(Build_Data(Build_Data(:,4)==g_sa(g),3)==1 | Build_Data(Build_Data(:,4)==g_sa(g),3)==2); % sum all building with usage 1 or 2
     SA_WP(g,1)=sum(Work_places(:,2)==g_sa(g));
     SA_JOBS(g,1)=sum(Work_places(:,2)==g_sa(g) & ((Work_places(:,7)==1 | Work_places(:,7)==3)))/sum(Work_places(:,2)==g_sa(g) & (Work_places(:,7)~=2 & Work_places(:,7)~=99));
-    SA_LOCAL(g,1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2))/sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2 | Individuals_data(:,12)==99));
+    % col(12) 'working status' never takes the value 99 anywhere in this
+    % codebase - the local/outside distinction lives in col(15)
+    % ('building_work_place'), which find_job_1.m sets to 99 specifically
+    % for outside hires. The old denominator (col12==2 | col12==99) was
+    % therefore always identical to the numerator (col12==2) - SA_LOCAL
+    % was structurally pinned at 1.0 regardless of the real local/outside
+    % split. Numerator now requires local (col15~=99); denominator is all
+    % currently-working individuals in the SA.
+    SA_LOCAL(g,1)=sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)==2 & Individuals_data(:,15)~=99)/sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)==2);
     SA_WORKING(g,1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2))/sum(Work_places(:,2)==g_sa(g) & (Work_places(:,7)~=2 & Work_places(:,7)~=99));
     SA_IDLE(g,1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==1))/sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)>0);
     SA_WAGE(g,1)=mean(Individuals_data(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,15)>0 & Individuals_data(:,15)~=99,14));
@@ -454,7 +455,9 @@ for i=1:steps
     sumdata(i).avgWage= average_wage;
     sumdata(i).stdWage= std_wage;
     sumdata(i).Wage_Change= Wage_Change;
-    
+    sumdata(i).n_looking = sum(Individuals_data(:,12)==1); % currently job-seeking (status=1)
+    sumdata(i).n_working = sum(Individuals_data(:,12)==2); % currently employed (status=2)
+
     lost_jobs_B_ID =[];
 
     %% building movement - recovery, assets and work places
@@ -636,7 +639,7 @@ for i=1:steps
     a=Build_Data(:,3)>0; % usage > 0
     Floor_Size=sum(Build_Data(a,7).*ceil(Build_Data(a,11))); % floor size for building with usage (area*floors)
     LU=[];new_A=[];new_B=[];HH_change=[];
-    new_jobs_work_places=[];HH_ID_left=[];lost_job_id=[];
+    new_jobs_work_places=[];HH_ID_left=[];lost_job_id=[];closed_wp_ids_today=[];
     HH_destroyed=[];bad_Assets=[];lost_jobs=[];Ind_change_routine=[];
     max_salary = max(Work_places(:,8));
     row = find(Work_places(:,8) == max_salary); % index fo max salary
@@ -766,22 +769,25 @@ for i=1:steps
         MVB30=[VISITS(:,1),nanmean(VISITS(:,2:end),2)];
         % calculate visits by precentile up to 100
         P=[0,prctile(MVB30(:,2),1:100)]; % first element is zero then 101 in total. index shift
-        for ppp=1:size(P,2)-1 % Now size-1?
-            a=MVB30(:,2)>=P(ppp) &  MVB30(:,2)<P(ppp+1); % locate precentile
-            MVB30(a,3)=ppp; % update
-        end
-        MVB30(MVB30(:,3)==0,3)=100; % update upper precentile
+        % Vectorized (was: a 100-iteration loop re-scanning the whole
+        % column each time to find which bin every row falls in) -
+        % ported from the same fix in modelthesis/run_model_earthquake.m.
+        % Since P doesn't depend on each row's own value, the bin index
+        % for row value v is exactly count(P(1:100) <= v) - same
+        % P(ppp)<=v<P(ppp+1) definition, all rows computed in one
+        % broadcast comparison instead of a per-bin loop.
+        rank_col = sum(MVB30(:,2) >= P(1:100), 2);
+        rank_col(rank_col==0) = 100; % same fallback as the old post-loop fixup
+        MVB30(:,3) = rank_col;
                 
         %% mean salary for all buildings withe workers comm only!!!
         %building_average_salary=cal_bui_sa(Work_places,Build_Data); % building sum salary
         building_average_salary=cal_bui_sa_subsidy(Work_places, Build_Data, destroyed_B, subsidy_businesses); % building sum salary
         P=[0,prctile(building_average_salary(:,2),1:100)]; % salary by precentiles
-        for ppp=1:size(P,2)-1
-            a=building_average_salary(:,2)>=P(ppp) &  building_average_salary(:,2)<P(ppp+1); % locate precentile
-            building_average_salary(a,3)=ppp; % update
-        end
-        % highest score
-        building_average_salary(building_average_salary(:,3)==0,3)=100; % update upper precentile
+        % Vectorized - same reasoning as the MVB30 ranking above.
+        rank_col = sum(building_average_salary(:,2) >= P(1:100), 2);
+        rank_col(rank_col==0) = 100; % highest score
+        building_average_salary(:,3) = rank_col;
         
         %% empty building or residance - potential salary
         B=Build_Data(Build_Data(:,3)<2,:); % living or combined and no HH
@@ -829,13 +835,7 @@ for i=1:steps
         lost_jobs_B_ID(:,3)=round(lost_jobs_WP_ID(:,2)-1); % col(3) workplace-1
         newB = ismember(Work_places(:,1),lost_jobs_B_ID(:,1)); % find all building id
         lost_jobs_B_ID(:,4)=lost_jobs_B_ID(:,3)./lost_jobs_B_ID(:,2)<0.5; % normilized value < 0.5
-        
-        %% people lost job        
-        ind_lost_job = ismember(Individuals_data(:,15),lost_jobs_B_ID(:,1)); % 'building_work_place'
-        Individuals_data(ind_lost_job,12) = 1; % 'working status' = 1
-        Individuals_data(ind_lost_job,15) = 0; % 'building_work_place' = 0
-        Individuals_data(ind_lost_job,14) = 0; % 'income' = 0
-        
+
         %% delete all jobs (original, before policy change)
         %F=lost_jobs_B_ID(lost_jobs_B_ID(:,4)==1,1); % locate all lost jobs
         %Work_places(ismember(Work_places(:,1),F),7)=2; % delete all jobs from building
@@ -872,11 +872,11 @@ for i=1:steps
         end
         
         Work_places(ismember(Work_places(:,1),F),7)=2;
-        
-        lost_job_id=Work_places(ismember(Work_places(:,1),F),6);
-        
-        Build_Data(ismember(Build_Data(:,1),F) & Build_Data(:,3)==3,3)=0;
 
+        lost_job_id=Work_places(ismember(Work_places(:,1),F),6);
+        closed_wp_ids_today=[closed_wp_ids_today;Work_places(ismember(Work_places(:,1),F),6)];
+
+        Build_Data(ismember(Build_Data(:,1),F) & Build_Data(:,3)==3,3)=0;
 
 
 
@@ -887,25 +887,49 @@ for i=1:steps
         [~,locB]=ismember(F,Work_places(:,1)); % indexes by matching building ID
         Work_places(locB,7)=2; % 'occupied'=2
         lost_job_id=[lost_job_id;Work_places(locB,6)]; % append rows only col(6) - 'id'
-        
+        closed_wp_ids_today=[closed_wp_ids_today;Work_places(locB,6)];
+
+        %% people lost job - matched by the SPECIFIC workplace slot that
+        % actually closed today (work_place_id, col 17), not by building
+        % (col 15) - matching by building previously laid off every
+        % current employee at a building even when only one slot of
+        % several was supposed to close.
+        ind_lost_job = ismember(Individuals_data(:,17),closed_wp_ids_today);
+        Individuals_data(ind_lost_job,12) = 1; % 'working status' = 1
+        Individuals_data(ind_lost_job,15) = 0; % 'building_work_place' = 0
+        Individuals_data(ind_lost_job,17) = 0; % 'work_place_id' = 0
+        Individuals_data(ind_lost_job,14) = 0; % 'income' = 0
+
         %% commercial potantial change LU
         if  comm_policy==0
             [locA,locB]=ismember(pot_sal_for_B(:,1),MVB30(:,1)); % building ID and total wage ; mean visit per building
             pot_sal_for_B(locA,3)=MVB30(locB(locB>0),3); % new col(3) append mean visits ranking
-            Change_LU=[]; 
-            for iiiii=1:size(pot_sal_for_B,1)
-                A=[building_average_salary(:,2);pot_sal_for_B(iiiii,2)]; % new vector salary by building
-                P=[0,prctile(A,1:100)]; % salary by precentiles with new adeed values
-                for ppp=1:size(P,2)-1 
-                    a=A>=P(ppp) &  A<P(ppp+1); % locate salary ranking
-                    if a(end)==1 % break when found ranking
-                        break
-                    end
+            % Vectorized (was: per-candidate loop calling prctile fresh for
+            % every candidate, then linearly scanning 100 bins by
+            % re-testing bin membership against the WHOLE base array just
+            % to read its last element) - ported from the same fix in
+            % modelthesis/run_model_earthquake.m. Mathematically identical
+            % result: for each candidate, prctile([base_salaries;
+            % candidate_value], 1:100) is still computed with the
+            % candidate as the last element, exactly as before - just
+            % batched into one matrix call instead of one call per
+            % candidate. The bin index (ppp) a value v falls into is
+            % exactly count(P(1:100) <= v), same as the two ranking loops
+            % above - thresholds (20/40) unchanged from the original.
+            Change_LU=[];
+            Mcand = size(pot_sal_for_B,1);
+            if Mcand>0
+                base_col = building_average_salary(:,2);
+                cand_vals = pot_sal_for_B(:,2)'; % 1 x Mcand
+                A_mat = [repmat(base_col,1,Mcand); cand_vals]; % (Nbase+1) x Mcand
+                P_raw = prctile(A_mat,1:100); % 100 x Mcand normally, but Mcand==1 makes A_mat a plain column vector and prctile degenerates to a 1x100 row instead
+                if Mcand==1
+                    P_raw = P_raw(:);
                 end
-                V=pot_sal_for_B(iiiii,3)-ppp; % substruct new rank from old
-                if V>20 && V<40
-                    Change_LU=[Change_LU;pot_sal_for_B(iiiii,1)]; % save building id ; 20 < diff < 40
-                end
+                P_mat = [zeros(1,Mcand); P_raw]; % 101 x Mcand, row1=P(1)=0 matching the scalar P(1:100) below
+                ppp_vec = sum(P_mat(1:100,:) <= cand_vals, 1)'; % Mcand x 1 - P(1:100) = [0, prctile(1)..prctile(99)], same as the two ranking loops above
+                V_vec = pot_sal_for_B(:,3) - ppp_vec;
+                Change_LU = pot_sal_for_B(V_vec>20 & V_vec<40, 1);
             end
             %% change land use
             %[locA,~]=ismember(Build_Data(:,1),Change_LU); % locate building ID in new list
@@ -1058,10 +1082,14 @@ for i=1:steps
         if P>=1
             P = 0.8;
         end
-        S=round(sum(F)*P); % qualified for work by probability 
+        S=round(sum(F)*P); % qualified for work by probability
         F=find(F==1);
         P=datasample(F,S,'replace',false'); % random unique indexes
-        Individuals_data(F,12)=1; % 'working status'=1
+        % was Individuals_data(F,12)=1 - applied the status change to the
+        % ENTIRE eligible pool F instead of the size-S random sample P
+        % actually drawn from it, pushing everyone eligible into job
+        % search regardless of the computed probability-scaled target.
+        Individuals_data(P,12)=1; % 'working status'=1
     end
     
     %% imiggratoin inside ; update agents list and workplaces
@@ -1118,7 +1146,9 @@ for i=1:steps
             SA_WP(g,i+1)=sum(Work_places(:,2)==g_sa(g));
             SA_JOBS(g,i+1)=sum(Work_places(:,2)==g_sa(g) & ((Work_places(:,7)==1 | Work_places(:,7)==3)))/sum(Work_places(:,2)==g_sa(g) & (Work_places(:,7)~=2 & Work_places(:,7)~=99));
             SA_WORKING(g,i+1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2))/sum(Work_places(:,2)==g_sa(g) & (Work_places(:,7)~=2 & Work_places(:,7)~=99));
-            SA_LOCAL(g,i+1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2))/sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2 | Individuals_data(:,12)==99));
+            % see the day-1 SA_LOCAL init above for why col(15)~=99 (not
+            % col(12)==99) is the correct local/outside check
+            SA_LOCAL(g,i+1)=sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)==2 & Individuals_data(:,15)~=99)/sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)==2);
             SA_IDLE(g,i+1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==1))/sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)>0);
             SA_WAGE(g,i+1)=mean(Individuals_data(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,15)>0 & Individuals_data(:,15)~=99,14));
             SA_OUTCOME(g,i+1)=sum(Work_places(Work_places(:,2)==g_sa(g),8));
@@ -1191,7 +1221,7 @@ end
 
 
 clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
-            Individuals_data Individuals_data_P Work_places Work_places_P out_file_name file kk...
+            Individuals_data Individuals_data_P Work_places Work_places_P out_file_name file kk run_uid...
             SA_OUTCOME SA_POP SA_PRICE SA_SERVICE SA_WAGE SA_WP SA_RESIDENT SA_HOUSE SA_COMERCIAL...
             SA_IDLE SA_LOCAL SA_WORKING SA_JOBS SA_FIRST SA_SECOND SA_THIRD SA_FOURTH...
             SA_FIFTH SA_SIXTH SA_SEVENTH SA_EIGHTH SA_NINTH SA_TENTH SA_AREA...
@@ -1202,6 +1232,6 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             outside_commute_penalty_pct Sheltered_Outside temp_dev_delay temp_dev_duration...
             n_temp_dev_sites temp_dev_capacity_frac temp_dev_site_coords Temp_Dev_Sites Temp_Dev_Assign...
             sumdata destroyed_B RECOVERY
-full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk)]);
+full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk),' ',run_uid]);
 save(full_file_name);
 end

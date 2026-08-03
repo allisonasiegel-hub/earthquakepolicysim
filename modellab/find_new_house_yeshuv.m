@@ -16,7 +16,12 @@ for j=1:size(FFF1,1)
     IX=1;
     possible_assets_Y=Assets(Assets(:,1)~=SA & Assets(:,6)==Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:);
     possible_assets_O=Assets(Assets(:,1)~=SA & Assets(:,6)~=Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:);
-    
+
+    % Only assets in buildings still zoned residential are habitable - see
+    % find_new_house_same_stat.m for the full explanation.
+    possible_assets_Y = filter_residential_assets(possible_assets_Y, Build_Data);
+    possible_assets_O = filter_residential_assets(possible_assets_O, Build_Data);
+
     if size(possible_assets_Y,1)>0
         [Assets,HH_data,Build_Data,lu,new_a,new_b,hh_change]=find_new_house_sa_score(pd,HH_data,Individuals_data...
             ,Build_Data,Build_Distance_matrix_400,Assets,wresd,FFF,possible_assets_Y);

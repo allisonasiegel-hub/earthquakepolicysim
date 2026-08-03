@@ -14,6 +14,15 @@ if selected_A(3)>1
     new_A(:,4)=HH_data(FFF1,1);
     HH_data(FFF1,11)=selected_A(3); % change HH data to new assets
     HH_data(FFF1,10)=selected_A(2); % change HH data to new building
+    % SA (col 1) was never synced to the new asset's SA, so any cross-SA
+    % move (via find_new_house_sa_score, used for same-yeshuv/other-yeshuv
+    % relocations) silently kept the household's OLD SA on record forever -
+    % SA-level metrics/maps stayed blind to real relocations, and
+    % who_is_moving.m kept evaluating these HH under their stale original
+    % SA's move probability. Within-SA moves (find_new_house_same_stat's
+    % primary pathway) are unaffected since selected_A(1) already equals
+    % the current SA there.
+    HH_data(FFF1,1)=selected_A(1); % sync SA to the new asset's SA
     new_A(:,1)=selected_A(3);
     new_A(:,2)=1;
     new_A(:,3)=selected_A(1);
