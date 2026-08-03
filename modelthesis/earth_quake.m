@@ -2,7 +2,7 @@ function [destroyed_B_P, destroyed_B] = earth_quake(Build_Data, dmg_input)
 
     if nargin < 2 || isempty(dmg_input)
         error('earth_quake:MissingDamageTable', ...
-              'Provide a damage table (filename, table, or N×2 numeric).');
+              'Provide a damage table (filename, table, or Nx2 numeric).');
     end
 
     %--- normalize damage table to a MATLAB table with vars SAID,dmg_prc
@@ -14,7 +14,7 @@ function [destroyed_B_P, destroyed_B] = earth_quake(Build_Data, dmg_input)
         T = array2table(dmg_input(:,1:2), 'VariableNames', {'SAID','dmg_prc'});
     else
         error('earth_quake:BadDamageTable', ...
-              'dmg_input must be filename, table with SAID/dmg_prc, or N×2 numeric.');
+              'dmg_input must be filename, table with SAID/dmg_prc, or Nx2 numeric.');
     end
 
     % If names are not exactly SAID/dmg_prc, coerce first two columns

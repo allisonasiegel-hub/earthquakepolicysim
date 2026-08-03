@@ -4,7 +4,7 @@
 %now i will edit for the metrics
 % update tracking for costs of housing, moving, etc
 %MOST RECENT PLEASE KEEP WORKING ON THIS
-%TODAY IS JUly 22 2026
+%TODAY IS JUly 27 2026
 %
 % FORK for shock-policy development (subsidy + shelter), branched from
 % nextchangesfortracker.m. Everything here is gated by subsidy_residents
@@ -44,10 +44,31 @@ tic
 % Standalone runs keep the original default of 2.
 if ~exist('n_sims','var'); n_sims=2; end
 sims=n_sims;
+% CONCURRENCY FIX: run_uid uniquely identifies THIS MATLAB process, so
+% that when multiple sweep runs execute concurrently (now safe with
+% Parallel Computing Toolbox installed), their intermediate output files
+% (earthquakeF\<out_file_name> <kk> <run_uid>.mat) and
+% run_earthquake_setting.m's temp tag file don't collide with each
+% other. Defaults to the OS process ID (unique across concurrently
+% running processes); run_earthquake_setting.m sets this explicitly
+% before calling run() so both sides agree on the same value.
+if ~exist('run_uid','var'); run_uid=sprintf('pid%d', feature('getpid')); end
 for kk = 1:sims
         %kk;kk
-data='data_for_model_tmine_agesplit70'; data2 = split(data, '_');
+if ~exist('init_dataset_name','var'); init_dataset_name='data_for_model_tmine_agesplit70'; end
+data=init_dataset_name; data2 = split(data, '_');
 file='C:\Users\allis\Documents\MATLAB\modelthesis\'; % load and define
+% BUG FIX: the original run_model_eq.m loads JobsPerM_comm dynamically
+% from [file,'model parameters.csv'] at the top of the script, so it's
+% automatically correct for whatever city's data is loaded. That got lost
+% at some point -- run_model_earthquake.m had it hardcoded as a literal
+% (0.007790361, Ashkelon's value) in two places in the land-use module.
+% Restored here; lu_jobs_per_meter/lu_potential_jobs_per_meter can still
+% be overridden explicitly for testing (see their ~exist guards below),
+% but now default to the dynamically-loaded, city-correct value.
+[~,~,models_par_tmp]=xlsread([file,'TVR\model parameters.csv']);
+JobsPerM_comm_loaded=models_par_tmp{strcmp(models_par_tmp(:,1),'JobsPerM_comm'), 2};
+clearvars models_par_tmp
 load(data);
 % resSearchLen retry mechanism: col 13 tracks each HH's consecutive failed
 % housing-search attempts. Was never actually wired in anywhere in this
@@ -65,6 +86,12 @@ HH_data(:,13)=0;
 [sas_data,intra_SA,intra_P]=read_sas_data([file,'TVR\'],'sas_national.xlsx'); %SA data
 unique_stat=unique(Build_Data(:,4));
 intra_SA=intra_SA(ismember(intra_SA(:,1),unique_stat),:);
+
+% Real per-SA annual population growth rates from actual Tiberias census
+% data (TVR/real_growth_rates.csv, derived from TVR/growthrates1.xlsx),
+% used by migration_19.m in place of the misused inOutRatio column --
+% see the BUG FIX note in migration_19.m for the full explanation.
+real_growth_rate=readmatrix([file,'TVR\real_growth_rates.csv']);
 random_number=rand(size(HH_data,1)*4,1);
 comm_policy=0;
 min_sal = 5000; % min salary according to BTL in 2017
@@ -252,7 +279,11 @@ if service_std==0; service_std=eps; end
 
 
 %% more model parameters
-[commute]=xlsread([file,'commuting.xlsx']);
+% BUG FIX: root-level commuting.xlsx is a different, wrong city's data
+% (settlement 7100, not Tiberias's 6700 -- confirmed by inspecting both
+% files). Same class of bug as the sas_national.xlsx fix above. Use the
+% TVR-specific copy instead.
+[commute]=xlsread([file,'TVR\commuting.xlsx']);
 Y=unique(Build_Data(:,12)); % unique 'yeshuv'
 for y=1:length(Y)
     a=Build_Data(:,12)==Y(y); % map all similar 'yeshuv' in col(12)
@@ -265,6 +296,7 @@ for y=1:length(Y)
 end
 Build_Data_p=[Build_Data_p,'Working zone']; % add header title
 VISITS=[Build_Distance_matrix_400(:,1)]; % all building ID in 400m distance as first col
+SALARY_HIST=Build_Data(:,1); % rolling history of daily building_average_sa, keyed by ALL building IDs (0 where not currently commercial) -- smooths the salary side of the ranking to match VISITS' own 30-day smoothing
 
 g_sa=unique(Build_Data(:,4)); % unique SA ID
 for g=1:length(g_sa)
@@ -277,7 +309,16 @@ for g=1:length(g_sa)
     SA_RESIDENT(g,1)=sum(Build_Data(Build_Data(:,4)==g_sa(g),3)==1 | Build_Data(Build_Data(:,4)==g_sa(g),3)==2); % sum all building with usage 1 or 2
     SA_WP(g,1)=sum(Work_places(:,2)==g_sa(g));
     SA_JOBS(g,1)=sum(Work_places(:,2)==g_sa(g) & ((Work_places(:,7)==1 | Work_places(:,7)==3)))/sum(Work_places(:,2)==g_sa(g) & (Work_places(:,7)~=2 & Work_places(:,7)~=99));
-    SA_LOCAL(g,1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2))/sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2 | Individuals_data(:,12)==99));
+    % BUG FIX: find_job_1.m always sets Individuals_data col(12) ('working
+    % status') to 2 for anyone employed, whether the job is local or
+    % outside-city -- the local/outside distinction lives in col(15)
+    % ('building_work_place'), which find_job_1.m sets to 99 specifically
+    % for outside hires (see find_job_1.m lines 35 vs 50). col(12) itself
+    % never takes the value 99 anywhere in this codebase, so the old
+    % formula's denominator (col12==2 | col12==99) was always identical to
+    % its numerator (col12==2) -- SA_LOCAL was structurally pinned at 1.0
+    % regardless of the real local/outside split.
+    SA_LOCAL(g,1)=sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)==2 & Individuals_data(:,15)~=99)/sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)==2);
     SA_WORKING(g,1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2))/sum(Work_places(:,2)==g_sa(g) & (Work_places(:,7)~=2 & Work_places(:,7)~=99));
     SA_IDLE(g,1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==1))/sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)>0);
     SA_WAGE(g,1)=mean(Individuals_data(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,15)>0 & Individuals_data(:,15)~=99,14));
@@ -625,32 +666,78 @@ for i=1:steps
     if ~exist('lu_warmup','var'); lu_warmup=4; end % steps before land-use/business updates start
     if ~exist('lu_update_every','var'); lu_update_every=1; end % run every Nth step after warmup (raise to speed up a test run)
 
+    % Rank-diff thresholds for the visits-vs-salary percentile ranking
+    % system (building_average_salary(:,5) / pot_sal_for_B-based V).
+    % Recomputed from scratch every active land-use step, so raising these
+    % directly reduces both the one-time backlog-clearing spike on the
+    % first active day (30 days of drift evaluated at once) and the
+    % ongoing daily churn rate.
+    % Defaults are the best-found combination from empirical testing
+    % (see run_threshold_test_lostjobs.m): raising the LU conversion band
+    % alone cuts residential/service churn roughly in half; separately
+    % pushing lost_jobs_rank_thresh out (while leaving new_jobs_rank_thresh
+    % at its original value, since new_jobs and lu_change are coupled --
+    % raising lu_change reduces how many buildings ever get seeded with
+    % workplaces, so also raising new_jobs compounds workplace loss)
+    % additionally brings workplace loss below the original baseline.
+    if ~exist('new_jobs_rank_thresh','var'); new_jobs_rank_thresh=20; end       % rank diff above this -> add workplaces to building
+    if ~exist('lost_jobs_rank_thresh','var'); lost_jobs_rank_thresh=-60; end    % rank diff below this -> delete building's workplaces entirely
+    if ~exist('lu_change_rank_lower','var'); lu_change_rank_lower=40; end       % Change_LU band lower bound
+    if ~exist('lu_change_rank_upper','var'); lu_change_rank_upper=60; end       % Change_LU band upper bound
+
     if i>lu_warmup && mod(i,lu_update_every)==0
         %% mean visit per building
         MVB30=[VISITS(:,1),nanmean(VISITS(:,2:end),2)];
         % calculate visits by precentile up to 100
         P=[0,prctile(MVB30(:,2),1:100)]; % first element is zero then 101 in total. index shift
-        for ppp=1:size(P,2)-1 % Now size-1?
-            a=MVB30(:,2)>=P(ppp) &  MVB30(:,2)<P(ppp+1); % locate precentile
-            MVB30(a,3)=ppp; % update
-        end
-        MVB30(MVB30(:,3)==0,3)=100; % update upper precentile
-                
+        % VECTORIZED (was: a 100-iteration loop re-scanning the whole
+        % column each time to find which bin every row falls in). Since
+        % P doesn't depend on each row's own value here (unlike the
+        % land-use candidate ranking above), the bin index for row value
+        % v is exactly count(P(1:100) <= v) -- same P(ppp)<=v<P(ppp+1)
+        % definition, all rows computed in one broadcast comparison.
+        rank_col = sum(MVB30(:,2) >= P(1:100), 2);
+        rank_col(rank_col==0) = 100; % same fallback as the old post-loop fixup
+        MVB30(:,3) = rank_col;
+
         %% mean salary for all buildings withe workers comm only!!!
         %building_average_salary=cal_bui_sa(Work_places,Build_Data); % building sum salary
         building_average_salary=cal_bui_sa_subsidy(Work_places, Build_Data, destroyed_B, subsidy_businesses); % building sum salary
-        P=[0,prctile(building_average_salary(:,2),1:100)]; % salary by precentiles
-        for ppp=1:size(P,2)-1
-            a=building_average_salary(:,2)>=P(ppp) &  building_average_salary(:,2)<P(ppp+1); % locate precentile
-            building_average_salary(a,3)=ppp; % update
+
+        % Smooth the salary side of the ranking over a rolling window
+        % (salary_smooth_window days, default 30 to match VISITS/MVB30's
+        % own window) instead of ranking on a single noisy day-snapshot.
+        % The raw daily total gets recorded for every building (0 where
+        % not currently commercial) in SALARY_HIST, keyed by the FULL,
+        % fixed building-ID list so buildings that only recently became
+        % commercial build up history gradually rather than appearing
+        % from nowhere with a single-day value.
+        if ~exist('salary_smooth_window','var'); salary_smooth_window=30; end
+        today_salary = zeros(size(SALARY_HIST,1),1);
+        [~, locS] = ismember(building_average_salary(:,1), SALARY_HIST(:,1));
+        today_salary(locS(locS>0)) = building_average_salary(locS>0,2);
+        SALARY_HIST = [SALARY_HIST, today_salary];
+        if size(SALARY_HIST,2) > salary_smooth_window+1
+            SALARY_HIST(:,2)=[]; % keep rolling window
         end
-        % highest score
-        building_average_salary(building_average_salary(:,3)==0,3)=100; % update upper precentile
-        
+        [~, locH] = ismember(building_average_salary(:,1), SALARY_HIST(:,1));
+        building_average_salary(:,2) = mean(SALARY_HIST(locH,2:end), 2);
+
+        P=[0,prctile(building_average_salary(:,2),1:100)]; % salary by precentiles
+        % VECTORIZED -- same reasoning as the MVB30 ranking above.
+        rank_col = sum(building_average_salary(:,2) >= P(1:100), 2);
+        rank_col(rank_col==0) = 100; % highest score
+        building_average_salary(:,3) = rank_col;
+
         %% empty building or residance - potential salary
         B=Build_Data(Build_Data(:,3)<2,:); % living or combined and no HH
         %% building area floors*area
-        workers=ceil((B(:,7).*ceil(B(:,11)).*0.007790361)); % model parameter jobs per comm
+        % Separate from lu_jobs_per_meter (which seeds jobs AFTER a
+        % building converts) -- this one feeds the potential-salary
+        % ranking that decides WHETHER a building converts in the first
+        % place (Change_LU below), so it's tested independently.
+        if ~exist('lu_potential_jobs_per_meter','var'); lu_potential_jobs_per_meter=JobsPerM_comm_loaded; end % dynamically loaded, city-correct
+        workers=ceil((B(:,7).*ceil(B(:,11)).*lu_potential_jobs_per_meter)); % model parameter jobs per comm
         pot_sal_for_B=[B(:,1),workers.*average_wage]; % building ID and total wage
         
         %% find_comm_visit_rank
@@ -658,9 +745,8 @@ for i=1:steps
         building_average_salary(locA,4)=MVB30(locB(locB>0),3); % col(4) visits ranking
         building_average_salary(:,5)=building_average_salary(:,4)-building_average_salary(:,3); % diff in ranks
         
-        %% new jobs - com only 
-        % check sensitivity of condition limit
-        new_jobs=building_average_salary(building_average_salary(:,5)>20,1); % only rank diff above 20 vector
+        %% new jobs - com only
+        new_jobs=building_average_salary(building_average_salary(:,5)>new_jobs_rank_thresh,1); % only rank diff above threshold vector
         std_wage_1 = std_wage/3; % normilize std wage value
 		B_D = [];
         for jjjj=1:length(new_jobs)
@@ -672,7 +758,8 @@ for i=1:steps
             end
         end
         if ~isempty(B_D)
-            working99_prob = 1-0.778038196; % Ashkelon commuting 99 probability
+            if ~exist('commute_outside_rate','var'); commute_outside_rate=0.246; end % Tiberias zone-99 share (TVR/commuting.xlsx) -- was Ashkelon's rate (0.778038196)
+            working99_prob = 1-commute_outside_rate;
             new_jobs_sa=normrnd(average_wage,std_wage_1,size(B_D,1),1); % normalized wage vector
             occ=zeros(size(B_D,1),1); % zeros vector
             working99 = randsample(size(B_D,1), round(working99_prob*size(B_D,1)));
@@ -684,7 +771,7 @@ for i=1:steps
         end
 
         %% lost jobs
-        lost_jobs_B_ID=building_average_salary(building_average_salary(:,5)<-20,1); % only rank diff below -20 vector
+        lost_jobs_B_ID=building_average_salary(building_average_salary(:,5)<lost_jobs_rank_thresh,1); % only rank diff below threshold vector
         lost_jobs_B_ID=Build_Data(ismember(Build_Data(:,1),lost_jobs_B_ID),[1,17]); % all matching ID cols(1 and 17)
         [~, newB] = ismember(lost_jobs_B_ID(:,1),Work_places(:,1)); % building ID first index matching
         lost_jobs_WP_ID = Work_places( newB,[1,5]); % current WP count out of avalible by building
@@ -694,12 +781,19 @@ for i=1:steps
         newB = ismember(Work_places(:,1),lost_jobs_B_ID(:,1)); % find all building id
         lost_jobs_B_ID(:,4)=lost_jobs_B_ID(:,3)./lost_jobs_B_ID(:,2)<0.5; % normilized value < 0.5
         
-        %% people lost job        
-        ind_lost_job = ismember(Individuals_data(:,15),lost_jobs_B_ID(:,1)); % 'building_work_place'
-        Individuals_data(ind_lost_job,12) = 1; % 'working status' = 1
-        Individuals_data(ind_lost_job,15) = 0; % 'building_work_place' = 0
-        Individuals_data(ind_lost_job,14) = 0; % 'income' = 0
-        
+        % NOTE: individual-level job loss used to be applied here, matched
+        % by BUILDING id against ALL of lost_jobs_B_ID -- but multi-job
+        % buildings (col(4)==0 below) only ever close ONE workplace slot
+        % per flagged day, not all of them. Matching by building
+        % unemployed every current employee of a flagged multi-job
+        % building in one shot, wildly overcounting job loss relative to
+        % what actually closed. Fixed below: individuals are now matched
+        % by their SPECIFIC work_place_id against the workplaces that
+        % actually closed today (closed_wp_ids_today), computed after both
+        % the close-all (single-job buildings) and close-one (multi-job
+        % buildings) branches run.
+        closed_wp_ids_today = [];
+
         %% delete all jobs (original, before policy change)
         %F=lost_jobs_B_ID(lost_jobs_B_ID(:,4)==1,1); % locate all lost jobs
         %Work_places(ismember(Work_places(:,1),F),7)=2; % delete all jobs from building
@@ -736,9 +830,10 @@ for i=1:steps
         end
         
         Work_places(ismember(Work_places(:,1),F),7)=2;
-        
+
         lost_job_id=Work_places(ismember(Work_places(:,1),F),6);
-        
+        closed_wp_ids_today=[closed_wp_ids_today;lost_job_id];
+
         Build_Data(ismember(Build_Data(:,1),F) & Build_Data(:,3)==3,3)=0;
 
 
@@ -751,25 +846,43 @@ for i=1:steps
         [~,locB]=ismember(F,Work_places(:,1)); % indexes by matching building ID
         Work_places(locB,7)=2; % 'occupied'=2
         lost_job_id=[lost_job_id;Work_places(locB,6)]; % append rows only col(6) - 'id'
-        
+        closed_wp_ids_today=[closed_wp_ids_today;Work_places(locB,6)];
+
+        %% people lost job -- matched by the SPECIFIC workplace slot that
+        % actually closed today (work_place_id, col 17), not by building
+        ind_lost_job = ismember(Individuals_data(:,17),closed_wp_ids_today);
+        Individuals_data(ind_lost_job,12) = 1; % 'working status' = 1
+        Individuals_data(ind_lost_job,15) = 0; % 'building_work_place' = 0
+        Individuals_data(ind_lost_job,17) = 0; % 'work_place_id' = 0
+        Individuals_data(ind_lost_job,14) = 0; % 'income' = 0
+
         %% commercial potantial change LU
         if  comm_policy==0
             [locA,locB]=ismember(pot_sal_for_B(:,1),MVB30(:,1)); % building ID and total wage ; mean visit per building
             pot_sal_for_B(locA,3)=MVB30(locB(locB>0),3); % new col(3) append mean visits ranking
-            Change_LU=[]; 
-            for iiiii=1:size(pot_sal_for_B,1)
-                A=[building_average_salary(:,2);pot_sal_for_B(iiiii,2)]; % new vector salary by building
-                P=[0,prctile(A,1:100)]; % salary by precentiles with new adeed values
-                for ppp=1:size(P,2)-1 
-                    a=A>=P(ppp) &  A<P(ppp+1); % locate salary ranking
-                    if a(end)==1 % break when found ranking
-                        break
-                    end
-                end
-                V=pot_sal_for_B(iiiii,3)-ppp; % substruct new rank from old
-                if V>20 && V<40
-                    Change_LU=[Change_LU;pot_sal_for_B(iiiii,1)]; % save building id ; 20 < diff < 40
-                end
+            % VECTORIZED (was: per-candidate loop calling prctile fresh
+            % for every candidate, then linearly scanning 100 bins by
+            % re-testing bin membership against the WHOLE base array just
+            % to read its last element -- O(candidates x 100 x buildings)
+            % of pure waste). Mathematically identical result: for each
+            % candidate, prctile([base_salaries; candidate_value], 1:100)
+            % is still computed with the candidate as the last element,
+            % exactly as before -- just batched into one matrix call
+            % instead of one call per candidate. The bin index (ppp) that
+            % a value v falls into, given edges P(1)=0 <= P(2) <= ... <=
+            % P(101)=max, is exactly count(P(1:100) <= v) -- proven by
+            % the same P(ppp)<=v<P(ppp+1) definition the original loop
+            % used, so this replaces both loops with two matrix ops.
+            Change_LU=[];
+            Mcand = size(pot_sal_for_B,1);
+            if Mcand>0
+                base_col = building_average_salary(:,2);
+                cand_vals = pot_sal_for_B(:,2)'; % 1 x Mcand
+                A_mat = [repmat(base_col,1,Mcand); cand_vals]; % (Nbase+1) x Mcand
+                P_mat = [zeros(1,Mcand); prctile(A_mat,1:100)]; % 101 x Mcand
+                ppp_vec = sum(P_mat(1:100,:) <= cand_vals, 1)'; % Mcand x 1
+                V_vec = pot_sal_for_B(:,3) - ppp_vec;
+                Change_LU = pot_sal_for_B(V_vec>lu_change_rank_lower & V_vec<lu_change_rank_upper, 1);
             end
             %% change land use
             %[locA,~]=ismember(Build_Data(:,1),Change_LU); % locate building ID in new list
@@ -841,14 +954,16 @@ for i=1:steps
                 end
             end
 
-            % resSearchLen retry gate (see site 1 above for full explanation)
-            if ~isempty(HH_ID_left)
-                [locA,~] = ismember(HH_data(:,2), HH_ID_left);
-                HH_data(locA,13) = HH_data(locA,13) + 1;
-                [~,locB] = ismember(HH_ID_left, HH_data(:,2));
-                HH_ID_left = HH_ID_left(HH_data(locB,13) >= resSearchLen);
-            end
-
+            % Land-use displacement: NO resSearchLen retry here (unlike the
+            % other two call sites). A household whose building just
+            % converted to commercial has nowhere left to retry against --
+            % the conversion trigger only fires once, so giving them a
+            % 30-day grace period just leaves them as a ghost occupant of
+            % an asset inside a now-commercial building for a month before
+            % eventual eviction, silently decoupling population from
+            % actual residential capacity. Matches the original (pre-fork)
+            % model's behavior: evict immediately if the one relocation
+            % attempt above failed.
             if ~isempty(HH_ID_left)
 
             [~,locTrack] = ismember(HH_ID_left,HH_MOVE_TRACK(:,1));
@@ -864,8 +979,12 @@ for i=1:steps
             did_not_find_house(HH_ID_left,Individuals_data,Work_places,HH_data,Assets);
     
             %% new jobs because of land use
-            JOBS_per_meter=0.007790361;
-            workers=(New_Comm_B(:,7).*ceil(New_Comm_B(:,11)).*JOBS_per_meter); % Area*roundup(floor)*0.014 ; have col(25) already claculated
+            % NOTE: the inline comment on the next line says "*0.014" but
+            % the value actually used is 0.00779 -- roughly half. Made
+            % configurable to test both.
+            if ~exist('lu_jobs_per_meter','var'); lu_jobs_per_meter=JobsPerM_comm_loaded; end % dynamically loaded, city-correct
+            JOBS_per_meter=lu_jobs_per_meter;
+            workers=(New_Comm_B(:,7).*ceil(New_Comm_B(:,11)).*JOBS_per_meter); % Area*roundup(floor)*jobs-per-meter ; have col(25) already claculated
             workers(workers<1)=1;
 		    New_Comm_B(:,17)=workers; % num of workers
             a=round(New_Comm_B(:,17))>0; % all workplaces with at least 1 worker
@@ -899,7 +1018,8 @@ for i=1:steps
     end
     
     %% MODEL SHUK HAVODA:
-    commute_outside=0.778038196;
+    if ~exist('commute_outside_rate','var'); commute_outside_rate=0.246; end % Tiberias zone-99 share (TVR/commuting.xlsx) -- was Ashkelon's rate (0.778038196)
+    commute_outside=commute_outside_rate;
     wp_prc=prctile(Work_places(:,8),1:100); % calc precentiles by salary
     top_10_prc=wp_prc(1,90); % get salary min threshold 
     lost_wp=Work_places(:,8)>top_10_prc; % workplaces with high salary
@@ -915,10 +1035,17 @@ for i=1:steps
         Work_places=[Work_places;WP_buildings]; % append new rows with 99 
     end
     %% change average_wage
-    alfa=0.3;%0.4
-    beta=0.8;%0.6
-    lamda=0.95;%0.25 % Ash: 0.85
-    delta=0.75;%0.8 % Ash:0.75
+    % Candidate values seen across comments in this file and the reference
+    % (romansunedited/run_model_eq.m): alfa in {0.2,0.3,0.4}, beta in
+    % {0.6,0.8}, lamda in {0.25,0.45,0.95}, delta in {0.75,0.8,0.95}.
+    if ~exist('wage_alfa','var'); wage_alfa=0.3; end
+    if ~exist('wage_beta','var'); wage_beta=0.8; end
+    if ~exist('wage_lamda','var'); wage_lamda=0.95; end
+    if ~exist('wage_delta','var'); wage_delta=0.75; end
+    alfa=wage_alfa;
+    beta=wage_beta;
+    lamda=wage_lamda;
+    delta=wage_delta;
     
     Occupied_Jobs_1=sum(Work_places(:,7)==1 | Work_places(:,7)==99)/sum(Work_places(:,7)~=2); % occupied/total
     a=Build_Data(:,3)>0; % 4 - industrial ; 5 - public ; 6 - senior 
@@ -958,15 +1085,26 @@ for i=1:steps
         if P>=1
             P = 0.8;
         end
-        S=round(sum(F)*P); % qualified for work by probability 
+        S=round(sum(F)*P); % qualified for work by probability
         F=find(F==1);
         P=datasample(F,S,'replace',false'); % random unique indexes
-        Individuals_data(F,12)=1; % 'working status'=1
+        % BUG FIX: this used to write Individuals_data(F,12)=1 -- F is the
+        % FULL eligible pool (everyone not-kid-and-not-working), not the
+        % S-sized random sample P that was just drawn from it. That threw
+        % away the intended probability-scaled sizing (S/P) and pushed the
+        % ENTIRE eligible pool into job search every time income_ratio>1,
+        % e.g. confirmed via diagnostic trace: day 1 eligible=12,676,
+        % S=455 intended, but all 12,676 got flipped to status 1 -- this
+        % is what created the artificial post-warmup unemployment
+        % backlog. Present identically in the untouched reference
+        % (run_model_eq.m:472), so it's an original-model bug, not
+        % something introduced by this session's tuning.
+        Individuals_data(P,12)=1; % 'working status'=1
     end
     
     %% imiggratoin inside ; update agents list and workplaces
     [Assets,HH_data,Individuals_data,Work_places,routine,new_A, HH_MOVE_TRACK]=...
-    migration_19(Assets,intra_SA,HH_data,Individuals_data,Work_places,new_A, HH_MOVE_TRACK);
+    migration_19(Assets,intra_SA,HH_data,Individuals_data,Work_places,new_A, HH_MOVE_TRACK, Build_Data, real_growth_rate);
 
     % resSearchLen retry gate (see site 1 above for full explanation).
     % HH_ID_left is normally already [] by this point (both earlier
@@ -1016,41 +1154,100 @@ for i=1:steps
     end
     new_A;
     if mod(i,sa_update_every)==0
-        for g=1:length(g_sa) % unique SA ID ; next step calculations
-            SA_PRICE(g,i+1)=nanmean(Assets(Assets(:,1)==g_sa(g),5)); % mean 'price M' 
-            SA_HOUSE(g,i+1)=nanmean(Assets(ismember(Assets(:, 2),Build_Data(Build_Data(:,3)==1 | Build_Data(:,3)==2,1)) & Assets(:,1)==g_sa(g), 5));
-            SA_COMERCIAL(g,i+1)=nanmean(Assets(ismember(Assets(:, 2),Build_Data(Build_Data(:,3)>2,1)) & Assets(:,1)==g_sa(g), 5));
-            SA_POP(g,i+1)=sum(Assets(Assets(:,1)==g_sa(g),11)); % sum accupied assests in SA 
-            SA_ASSETS(g,i+1)=sum(Assets(:,1)==g_sa(g)); % sum total assets in SA
-            SA_SERVICE(g,i+1)=sum(Build_Data(Build_Data(:,4)==g_sa(g),3)>2); % sum all building with usage>2 
-            SA_RESIDENT(g,i+1)=sum(Build_Data(Build_Data(:,4)==g_sa(g),3)==1 | Build_Data(Build_Data(:,4)==g_sa(g),3)==2); % sum all residential         
-            SA_WP(g,i+1)=sum(Work_places(:,2)==g_sa(g));
-            SA_JOBS(g,i+1)=sum(Work_places(:,2)==g_sa(g) & ((Work_places(:,7)==1 | Work_places(:,7)==3)))/sum(Work_places(:,2)==g_sa(g) & (Work_places(:,7)~=2 & Work_places(:,7)~=99));
-            SA_WORKING(g,i+1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2))/sum(Work_places(:,2)==g_sa(g) & (Work_places(:,7)~=2 & Work_places(:,7)~=99));
-            SA_LOCAL(g,i+1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2))/sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==2 | Individuals_data(:,12)==99));
-            SA_IDLE(g,i+1)=sum(Individuals_data(:,2)==g_sa(g) & (Individuals_data(:,12)==1))/sum(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,12)>0);
-            SA_WAGE(g,i+1)=mean(Individuals_data(Individuals_data(:,2)==g_sa(g) & Individuals_data(:,15)>0 & Individuals_data(:,15)~=99,14));
-            SA_OUTCOME(g,i+1)=sum(Work_places(Work_places(:,2)==g_sa(g),8));
-            SA_FIRST(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==1);
-            SA_SECOND(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==2);
-            SA_THIRD(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==3);
-            SA_FOURTH(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==4);
-            SA_FIFTH(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==5);
-            SA_SIXTH(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==6);
-            SA_SEVENTH(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==7);
-            SA_EIGHTH(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==8);
-            SA_NINTH(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==9);
-            SA_TENTH(g,i+1)=sum(HH_data(:,1)==g_sa(g) & HH_data(:,7)==10);
-            SA_AREA(g,i+1)=sum(Build_Data(Build_Data(:,4)==g_sa(g) & Build_Data(:,3)==3, 25));		
+        nSA = length(g_sa);
+        % VECTORIZED (was: a per-SA loop that re-scanned the FULL
+        % Assets/Build_Data/Work_places/Individuals_data/HH_data arrays
+        % from scratch for every metric, every SA -- ~20 SAs x ~25
+        % metrics of redundant full-array filtering per update. Group
+        % indices are computed ONCE and reused via accumarray, which is
+        % mathematically identical to the original nanmean/mean/sum over
+        % the same boolean masks. nanmean vs plain mean is preserved
+        % exactly per-metric to match the original's NaN handling.
+        [~, asset_grp] = ismember(Assets(:,1), g_sa);
+        [~, build_grp] = ismember(Build_Data(:,4), g_sa);
+        [~, wp_grp]    = ismember(Work_places(:,2), g_sa);
+        [~, ind_grp]   = ismember(Individuals_data(:,2), g_sa);
+        [~, hh_grp]    = ismember(HH_data(:,1), g_sa);
+
+        accsum     = @(grp,val) accumarray(grp(grp>0), val(grp>0), [nSA,1], @sum, 0);
+        accnanmean = @(grp,val) accumarray(grp(grp>0), val(grp>0), [nSA,1], @(x) mean(x,'omitnan'), NaN);
+        accmean    = @(grp,val) accumarray(grp(grp>0), val(grp>0), [nSA,1], @mean, NaN);
+
+        SA_PRICE(:,i+1) = accnanmean(asset_grp, Assets(:,5));
+
+        res_bld_ids  = Build_Data(Build_Data(:,3)==1 | Build_Data(:,3)==2, 1);
+        comm_bld_ids = Build_Data(Build_Data(:,3)>2, 1);
+        is_res_asset  = ismember(Assets(:,2), res_bld_ids);
+        is_comm_asset = ismember(Assets(:,2), comm_bld_ids);
+        house_grp = asset_grp; house_grp(~is_res_asset) = 0;
+        comm_grp  = asset_grp; comm_grp(~is_comm_asset) = 0;
+        SA_HOUSE(:,i+1)     = accnanmean(house_grp, Assets(:,5));
+        SA_COMERCIAL(:,i+1) = accnanmean(comm_grp,  Assets(:,5));
+
+        SA_POP(:,i+1)    = accsum(asset_grp, Assets(:,11));
+        SA_ASSETS(:,i+1) = accsum(asset_grp, ones(size(Assets,1),1));
+
+        SA_SERVICE(:,i+1)  = accsum(build_grp, double(Build_Data(:,3)>2));
+        SA_RESIDENT(:,i+1) = accsum(build_grp, double(Build_Data(:,3)==1 | Build_Data(:,3)==2));
+        area_grp = build_grp; area_grp(Build_Data(:,3)~=3) = 0;
+        SA_AREA(:,i+1) = accsum(area_grp, Build_Data(:,25));
+
+        SA_WP(:,i+1) = accsum(wp_grp, ones(size(Work_places,1),1));
+        wp7 = Work_places(:,7);
+        jobs_num_grp = wp_grp; jobs_num_grp(~(wp7==1 | wp7==3)) = 0;
+        jobs_den_grp = wp_grp; jobs_den_grp(wp7==2 | wp7==99) = 0;
+        jobs_num = accsum(jobs_num_grp, ones(size(Work_places,1),1));
+        jobs_den = accsum(jobs_den_grp, ones(size(Work_places,1),1));
+        SA_JOBS(:,i+1) = jobs_num ./ jobs_den;
+
+        ind12 = Individuals_data(:,12);
+        ind15 = Individuals_data(:,15);
+        working_num_grp = ind_grp; working_num_grp(ind12~=2) = 0;
+        working_num = accsum(working_num_grp, ones(size(Individuals_data,1),1));
+        SA_WORKING(:,i+1) = working_num ./ jobs_den;
+
+        SA_OUTCOME(:,i+1) = accsum(wp_grp, Work_places(:,8));
+
+        % BUG FIX: see the day-1 SA_LOCAL init above for the full
+        % explanation -- col(12)==99 never occurs, so this must read
+        % local/outside off col(15) instead.
+        local_num_grp = ind_grp; local_num_grp(~(ind12==2 & ind15~=99)) = 0;
+        local_den_grp = ind_grp; local_den_grp(ind12~=2) = 0;
+        local_num = accsum(local_num_grp, ones(size(Individuals_data,1),1));
+        local_den = accsum(local_den_grp, ones(size(Individuals_data,1),1));
+        SA_LOCAL(:,i+1) = local_num ./ local_den;
+
+        idle_num_grp = ind_grp; idle_num_grp(ind12~=1) = 0;
+        idle_den_grp = ind_grp; idle_den_grp(~(ind12>0)) = 0;
+        idle_num = accsum(idle_num_grp, ones(size(Individuals_data,1),1));
+        idle_den = accsum(idle_den_grp, ones(size(Individuals_data,1),1));
+        SA_IDLE(:,i+1) = idle_num ./ idle_den;
+
+        wage_grp = ind_grp; wage_grp(~(ind15>0 & ind15~=99)) = 0;
+        SA_WAGE(:,i+1) = accmean(wage_grp, Individuals_data(:,14));
+
+        hh7 = HH_data(:,7);
+        d1=hh_grp; d1(hh7~=1)=0;   SA_FIRST(:,i+1)  = accsum(d1,  ones(size(HH_data,1),1));
+        d2=hh_grp; d2(hh7~=2)=0;   SA_SECOND(:,i+1) = accsum(d2,  ones(size(HH_data,1),1));
+        d3=hh_grp; d3(hh7~=3)=0;   SA_THIRD(:,i+1)  = accsum(d3,  ones(size(HH_data,1),1));
+        d4=hh_grp; d4(hh7~=4)=0;   SA_FOURTH(:,i+1) = accsum(d4,  ones(size(HH_data,1),1));
+        d5=hh_grp; d5(hh7~=5)=0;   SA_FIFTH(:,i+1)  = accsum(d5,  ones(size(HH_data,1),1));
+        d6=hh_grp; d6(hh7~=6)=0;   SA_SIXTH(:,i+1)  = accsum(d6,  ones(size(HH_data,1),1));
+        d7=hh_grp; d7(hh7~=7)=0;   SA_SEVENTH(:,i+1)= accsum(d7,  ones(size(HH_data,1),1));
+        d8=hh_grp; d8(hh7~=8)=0;   SA_EIGHTH(:,i+1) = accsum(d8,  ones(size(HH_data,1),1));
+        d9=hh_grp; d9(hh7~=9)=0;   SA_NINTH(:,i+1)  = accsum(d9,  ones(size(HH_data,1),1));
+        d10=hh_grp; d10(hh7~=10)=0; SA_TENTH(:,i+1)  = accsum(d10, ones(size(HH_data,1),1));
+
+        for g=1:nSA % unique SA ID ; next step calculations
             SA_POP_RATIO(g,i+1)=SA_POP(g,i+1)/SA_POP(g,i);
-            SA_ASSET_RATIO(g,i+1)=SA_ASSETS(g,i)/SA_ASSETS(g,i+1); 
+            SA_ASSET_RATIO(g,i+1)=SA_ASSETS(g,i)/SA_ASSETS(g,i+1);
             SA_SERVICE_RATIO(g,i+1)=SA_SERVICE(g,i+1)/SA_SERVICE(g,i);
             % (population+asset+service)/3
             SA_C=(SA_POP_RATIO(g,i+1)+ SA_ASSET_RATIO(g,i+1)+ SA_SERVICE_RATIO(g,i+1))./3;
             SA_LOGC(g,i+1)=log(SA_C);
             SA_price1(g,i+1)= SA_PRICE(g,i+1).*(1+ SA_LOGC(g,i+1)); % price*(1+log(total ratio))
-    
-            b_data=Build_Data(Build_Data(:,4)==g_sa(g),:); % building list within SA
+
+            b_data=Build_Data(build_grp==g,:); % building list within SA
 
             % update dynamic commercial-only service ratio col(5)
             com_b=sum(b_data(:,3)>1 & b_data(:,3)<4); % commercial only (usage 2-3)
@@ -1351,14 +1548,16 @@ Metric_Change(18)=endpointDelta(Metric_Track,23); % success rate city delta - no
 
 
 clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
-            Individuals_data Individuals_data_P Work_places Work_places_P out_file_name file kk...
+            Individuals_data Individuals_data_P Work_places Work_places_P out_file_name file kk run_uid...
             SA_OUTCOME SA_POP SA_PRICE SA_SERVICE SA_WAGE SA_WP SA_RESIDENT SA_HOUSE SA_COMERCIAL...
             SA_IDLE SA_LOCAL SA_WORKING SA_JOBS SA_FIRST SA_SECOND SA_THIRD SA_FOURTH...
             SA_FIFTH SA_SIXTH SA_SEVENTH SA_EIGHTH SA_NINTH SA_TENTH SA_AREA HH_MOVE_TRACK HH_MOVE_TRACK_P Metric_Track Metric_Track_P SA_Relocation RelocationSummary SA_Demographics Metric_Change...
             wservice wservice_old eld_movef svc_filter steps sa_update_every resSearchLen...
+            new_jobs_rank_thresh lost_jobs_rank_thresh lu_change_rank_lower lu_change_rank_upper lu_jobs_per_meter lu_potential_jobs_per_meter init_dataset_name commute_outside_rate...
+            wage_alfa wage_beta wage_lamda wage_delta...
             subsidy_residents subsidy_pct w_subsidy_eld subsidy_duration HH_subsidy_tracker...
             displaced_shelter agents_per_sqm max_shelter_duration Shelters Shelter_Assign Shelter_HH_Track SA_Shelter_Rank
-full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',num2str(kk)]);
+full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',num2str(kk),' ',run_uid]);
 save(full_file_name);
 end
 

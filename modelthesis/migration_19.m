@@ -2,14 +2,41 @@
 
 
 function    [Assets,HH_data,Individuals_data,Work_places,routine,new_A, HH_MOVE_TRACK]=...
-            migration_19(Assets,sas_data,HH_data,Individuals_data,Work_places,new_A, HH_MOVE_TRACK)
+            migration_19(Assets,sas_data,HH_data,Individuals_data,Work_places,new_A, HH_MOVE_TRACK, Build_Data, real_growth_rate)
 %% get data
 routine=[];
 total_families=0;
+% BUG FIX: previously used sas_data(i,5) ('inOutRatio', a dimensionless
+% in/out migration ratio) directly as if it were an annual fraction of
+% vacant housing to fill (x=inOutRatio/365, multiplied by free_assets).
+% That produced ~21x too much population growth versus real Tiberias
+% census data (TVR/growthrates1.xlsx, "Percentage annual growth in the
+% Israeli population" per SA -- real average +1.11%/year, model was
+% producing ~+23%/year). real_growth_rate is now the actual per-SA annual
+% growth rate from that census data, applied to the model's CURRENT
+% household count in that SA (not free_assets, which is now only a cap on
+% how many new households can actually find housing). Negative real rates
+% are clipped to 0 here since this function only ever adds households --
+% real population decline in those SAs is expected to come through the
+% existing eviction/departure pathways elsewhere in the model, not by
+% migration_19.m removing households itself.
 for i=1:size(sas_data,1)
     free_assets=sum(Assets(Assets(:,1)==sas_data(i,1),11)==0); % unoccupied assets within SA count
-    x=sas_data(i,5)/365; % 5 - 'inOutRatio'
-    families=round(normrnd(x,x/3)*free_assets); % random*assets
+    current_hh_count=sum(HH_data(:,1)==sas_data(i,1)); % current households in SA
+    [~,locG]=ismember(sas_data(i,1),real_growth_rate(:,1));
+    if locG>0
+        annual_rate=real_growth_rate(locG,2);
+    else
+        annual_rate=mean(real_growth_rate(:,2)); % fallback: city-wide average
+    end
+    daily_rate=max(0,annual_rate)/365;
+    expected_new=daily_rate*current_hh_count;
+    if expected_new>0
+        families=round(normrnd(expected_new,expected_new/3));
+    else
+        families=0;
+    end
+    families=max(0,min(families,free_assets)); % can't exceed actual vacancy
 
     if families>0 
         families=datasample(HH_data,families); % random HH
@@ -24,6 +51,9 @@ for i=1:size(sas_data,1)
             %% FIND HOUSE 
             % matchnig ID ; unoccupied ; 'cost of life' <= 0.33*income
             possible_assets=Assets(Assets(:,1)==sas_data(i,1) & Assets(:,11)==0 & Assets(:,13)<=0.33*income,:);
+            % Only assets in buildings still zoned residential can be
+            % assigned to new arrivals (see filter_residential_assets.m).
+            possible_assets=filter_residential_assets(possible_assets, Build_Data);
             if  size(possible_assets,1)>1
                 selected_A=datasample( possible_assets,1); % random asset from list
             elseif size(possible_assets,1)==1 

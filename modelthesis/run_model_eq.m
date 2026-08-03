@@ -434,7 +434,7 @@ for i=1:steps
     job_ratio=(Occupied_Jobs_1/Occupied_Jobs)^(1-beta); % ( (occupied ratio new)/(occupied ratio initial) )^(1-0.6)
     floor_ratio=(Floor_Size_1/Floor_Size)^alfa; % ( (all buildings size)/(class 4-5-6 buildings size) )^0.4
     income_ratio=(job_ratio/floor_ratio)^(1/lamda); % ( (job ratio)/(floor ratio) )^(1/0.25)
-    %income_ratio = min(1.08, max(0.92, income_ratio));   % ±8% cap
+    %income_ratio = min(1.08, max(0.92, income_ratio));   % +/-8% cap
     if i >1 % after first iteration
         average_wage_1=income_ratio*average_wage; % new mean wage
         Wage_Change=average_wage_1-average_wage; % wage delta

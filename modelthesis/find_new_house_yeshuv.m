@@ -20,6 +20,11 @@ for j=1:size(FFF1,1)
     possible_assets_Y=Assets(Assets(:,1)~=SA & Assets(:,6)==Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:);
     possible_assets_O=Assets(Assets(:,1)~=SA & Assets(:,6)~=Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:);
 
+    % Only assets in buildings still zoned residential can be reoccupied
+    % (see filter_residential_assets.m).
+    possible_assets_Y = filter_residential_assets(possible_assets_Y, Build_Data);
+    possible_assets_O = filter_residential_assets(possible_assets_O, Build_Data);
+
     isElderly = HH_data(FFF,5)>=2;
 
     if size(possible_assets_Y,1)>0
