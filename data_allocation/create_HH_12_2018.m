@@ -38,11 +38,11 @@ for i=1:size(data,1)
     stat_HH=[ones(size(stat_HH,1),1).*data(i,1),stat_HH];
     
     %% calculate numbet of eldery people
-    num_65=round(sa_data(stat,HH_65_pcnt)*data(i,2)/100);
-    num_65_alone=round(sa_data(stat,HH_65_alone)/100*num_65);
+    num_65_target=round(sa_data(stat,HH_65_pcnt)*data(i,2)/100);
+    num_65_alone=round(sa_data(stat,HH_65_alone)/100*num_65_target);
     stat_HH(1:num_65_alone,3)=1;
-    stat_HH(1:num_65_alone,4)=3;   
-    HH_with_atleast_1_65=num_65-num_65_alone;
+    stat_HH(1:num_65_alone,4)=3;
+    HH_with_atleast_1_65=num_65_target-num_65_alone;
 
     % HH size
     stat_HH_size=floor(sa_data(stat,HH_size))/100;
@@ -83,12 +83,19 @@ for i=1:size(data,1)
     end
     %% delete extras HH
     stat_HH(stat_HH(:,1)==0,:)=[];
-    %% number of old people
-    num_65=round(sa_data(i,total_65)/100*sum(stat_HH(:,3)));
     %% find number of old in institutes
-    ins_65=round(sa_data(i,institute_65)/100*num_65);
+    % BUG FIX (ported from modelthesis): this used to recompute num_65 here
+    % from total_65 (demog_yishuv.age_65_up, a population HEADCOUNT) via
+    % round(sa_data(i,total_65)/100*sum(stat_HH(:,3))) -- dividing a raw
+    % count by 100 and multiplying by SA population inflated it ~10x, which
+    % then got clamped by the length(f) cap below to essentially "every
+    % eligible household", badly over-assigning elderly households. That
+    % population-based estimate was also a different, incompatible basis
+    % from num_65_target above (household-based, from HH_65_pcnt). Fix:
+    % reuse num_65_target consistently instead of recomputing from total_65.
+    ins_65=round(sa_data(i,institute_65)/100*num_65_target);
     %% delete old in institutes and living alone
-    extra_65=num_65-ins_65-sum(stat_HH(:,4)==3);  
+    extra_65=num_65_target-ins_65-sum(stat_HH(:,4)==3);
     %% find suitable HH (size of HH - number of kids) 
     f=(stat_HH(:,3)-stat_HH(:,5))>1;
     f=stat_HH(f,2);

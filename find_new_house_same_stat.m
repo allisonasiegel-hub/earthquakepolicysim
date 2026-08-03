@@ -15,7 +15,18 @@ for j=1:size(FFF1,1)
     possible_assets=Assets(Assets(:,1)==SA & Assets(:,11)==0 & Assets(:,13)<=0.33*income ,:); % same SA ; empty asset ; greater then income threshold
     possible_assets_Y=Assets(Assets(:,1)~=SA & Assets(:,6)==Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:); % other SA ; same yeshuv ; empty asset ; greater then income threshold
     possible_assets_O=Assets(Assets(:,1)~=SA & Assets(:,6)~=Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:); % other SA ; other yeshuv ; empty asset ; greater then income threshold
-    
+
+    % Only assets in buildings still zoned residential (usage 1 or 2,
+    % matching SA_RESIDENT's own definition) are habitable - a building
+    % converted to commercial via land-use change leaves its now-vacated
+    % Assets rows sitting in the table with occupied=0 forever (nothing
+    % deletes them), so without this filter a later household's search
+    % could get assigned into a unit inside a building that's no longer
+    % residential at all.
+    possible_assets   = filter_residential_assets(possible_assets,   Build_Data);
+    possible_assets_Y = filter_residential_assets(possible_assets_Y, Build_Data);
+    possible_assets_O = filter_residential_assets(possible_assets_O, Build_Data);
+
     if size(possible_assets,1)>0 % same SA
         [Assets,HH_data,Build_Data,lu,new_a,new_b,hh_change]=new_house(possible_assets,Assets,HH_data,Build_Data,FFF); % assign new house
     elseif size(possible_assets_Y,1)>0 % other SA same yeshuv

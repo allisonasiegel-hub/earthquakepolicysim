@@ -27,6 +27,7 @@ for i=1:length(u)
     ind_sa=sa_data(sa_data(:,1)==u(i),48:50); % {'comm31','comm34','comm99'}
     F=find(Individuals_data(:,2)==u(i) & Individuals_data(:,12)==2); % ind that are working
     worker_Metro_zone=round(length(F)*ind_sa);
+    worker_Metro_zone(isnan(worker_Metro_zone))=0; % defensive fallback: comm31/comm34 should be pre-filled by start_HH_2018up.m; if a gap slips through, treat as 0 commuters rather than "all remaining" (MATLAB's min() would otherwise silently ignore a NaN target and default to the full remaining pool)
     WORKER=WORKER+sum(worker_Metro_zone(1:3));
     for j=1:2
         worker_Metro_zone(j) = min(worker_Metro_zone(j), length(F));
@@ -45,10 +46,10 @@ for i=1:length(u)
             Work_places(locA,7)= Work_places(locA,7)+1;
             Work_places(locA,8)=Individuals_data(F(1:worker_Metro_zone(j)),14);
             F(1:worker_Metro_zone(j))=[];
-        elseif ~isempty(B)
+        elseif ~isempty(B) && worker_Metro_zone(j)>0
             % assign available workplaces even if fewer than requested
-            B=datasample(B,length(B),'replace',false);
-            num_assign=length(B);
+            num_assign=min(length(B),length(F));
+            B=datasample(B,num_assign,'replace',false);
             Individuals_data(F(1:num_assign),15:17)=work_place(B,[1,4,18]);
             ID=work_place(B,18);
             work_place(B,:)=[];
