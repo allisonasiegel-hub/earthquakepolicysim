@@ -136,7 +136,7 @@ switch city
         JobsPerM_comm=0.008932703; % matches modellab\TVR\model parameters.csv
         hotel_room_density=0.02128; % rooms per sqm floor-adjusted area - see identify_hotels_TVR.m
     case 'Jerusalem'
-        data='data_for_model_JER2'; % TODO: no data_for_model_JER2.mat in modellab yet - run the data_allocation pipeline or copy it in
+        data='data_for_model_JER'; % compiled via data_allocation/main_alloc.m, validated against census (see data_allocation/VALIDATION_AND_FIXES.md)
         file=[fileparts(mfilename('fullpath')),'\JER\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         commute_outside=NaN; % TODO
         alfa=NaN; beta=NaN; lamda=NaN; delta=NaN; % TODO
