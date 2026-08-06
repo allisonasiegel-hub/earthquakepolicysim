@@ -30,7 +30,8 @@ for j=1:size(FFF1,1)
     possible_assets_Y = filter_residential_assets(possible_assets_Y, Build_Data);
     possible_assets_O = filter_residential_assets(possible_assets_O, Build_Data);
 
-    isElderly = HH_data(FFF,5)>=2;
+    ageGroup = HH_data(FFF,5); % 0=non-elderly, 3=young-old, 6=old-old
+    isElderly = ageGroup>=2;
 
     % for elderly: filter within-SA pool to buildings with service ratio >= current building
     if isElderly && svc_filter==1 && size(possible_assets,1)>0
@@ -76,8 +77,8 @@ for j=1:size(FFF1,1)
 
     n_city = n_accepted_Y + n_accepted_O;
 
-    % Asset_Avail: [HH_ID, isElderly, n_SA_assets, n_city_assets, tried_SA, tried_city, success_SA, success_city]
-    Asset_Avail=[Asset_Avail; HH_data(FFF,2), double(isElderly), n_SA, n_city, tried_SA, tried_city, success_SA, success_city];
+    % Asset_Avail: [HH_ID, ageGroup(0=non-elderly,3=young-old,6=old-old), n_SA_assets, n_city_assets, tried_SA, tried_city, success_SA, success_city]
+    Asset_Avail=[Asset_Avail; HH_data(FFF,2), ageGroup, n_SA, n_city, tried_SA, tried_city, success_SA, success_city];
 
     if isempty(new_a)
         HH_ID=[HH_ID;FFF1(j)];

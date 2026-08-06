@@ -74,7 +74,10 @@ if nargin<17 || isempty(init_dataset_name); init_dataset_name='data_for_model_tm
 if nargin<18 || isempty(commute_outside_rate); commute_outside_rate=0.246; end % Tiberias zone-99 share
 if nargin<19 || isempty(wage_alfa); wage_alfa=0.3; end
 if nargin<20 || isempty(wage_beta); wage_beta=0.8; end
-if nargin<21 || isempty(wage_lamda); wage_lamda=0.95; end
+% wage_lamda default changed from 0.95 -> 0.55 -- see the matching
+% comment in run_model_earthquake.m for the late-period OAT sweep that
+% justified this (closest-to-flat post-freeze wage trend actually tested).
+if nargin<21 || isempty(wage_lamda); wage_lamda=0.55; end
 if nargin<22 || isempty(wage_delta); wage_delta=0.75; end
 
 n_sims=1;

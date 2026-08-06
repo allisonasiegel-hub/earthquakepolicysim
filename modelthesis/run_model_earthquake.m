@@ -384,7 +384,16 @@ HH_MOVE_TRACK_P = {
 % 6 Left city
 %% Time-series metrics
 
-Metric_Track = nan(steps,23);
+% cols 24-25 added: young-old (HH_data col5==3) / old-old (col5==6)
+% population counts, splitting the existing elderly count (col6, which
+% remains young-old+old-old combined) for the 3-way non-elderly/
+% young-old/old-old population breakdown.
+% cols 26-41 added: young-old/old-old versions of every remaining
+% elderly-vs-non-elderly family (SA/building service ratio, normalized
+% possible assets SA/city, attempt rate SA/city, success rate SA/city),
+% mirroring the existing elderly-combined columns (2,4,10,11,14,15,
+% 16-19,20-23) which are left unchanged.
+Metric_Track = nan(steps,41);
 
 Metric_Track_P = {
 'Timestep',...
@@ -409,7 +418,25 @@ Metric_Track_P = {
 'SuccessRate_SA_Elderly',...
 'SuccessRate_SA_NonElderly',...
 'SuccessRate_City_Elderly',...
-'SuccessRate_City_NonElderly'
+'SuccessRate_City_NonElderly',...
+'YoungOldPop',...
+'OldOldPop',...
+'SAServiceRatio_YoungOld',...
+'SAServiceRatio_OldOld',...
+'BuildingServiceRatio_YoungOld',...
+'BuildingServiceRatio_OldOld',...
+'NormPossAssets_SA_YoungOld',...
+'NormPossAssets_SA_OldOld',...
+'NormPossAssets_City_YoungOld',...
+'NormPossAssets_City_OldOld',...
+'AttemptRate_SA_YoungOld',...
+'AttemptRate_SA_OldOld',...
+'AttemptRate_City_YoungOld',...
+'AttemptRate_City_OldOld',...
+'SuccessRate_SA_YoungOld',...
+'SuccessRate_SA_OldOld',...
+'SuccessRate_City_YoungOld',...
+'SuccessRate_City_OldOld'
 };
 
 elderly = HH_data(:,5)>=2;
@@ -1040,7 +1067,16 @@ for i=1:steps
     % {0.6,0.8}, lamda in {0.25,0.45,0.95}, delta in {0.75,0.8,0.95}.
     if ~exist('wage_alfa','var'); wage_alfa=0.3; end
     if ~exist('wage_beta','var'); wage_beta=0.8; end
-    if ~exist('wage_lamda','var'); wage_lamda=0.95; end
+    % wage_lamda default changed from 0.95 -> 0.55: a late-period OAT
+    % sweep (land-use activity frozen, day 360+) found lamda controls the
+    % sign of the persistent post-freeze wage drift via the 1/lamda
+    % exponent on income_ratio -- 0.95 gave a small but permanent decline
+    % (-0.49% over days 360-550), 0.55 was the closest-to-flat value
+    % actually tested (+0.24%). alfa/beta/delta showed no comparably
+    % clean lever (alfa provably can't matter once land-use freezes,
+    % since floor_ratio's base is exactly 1 then; beta/delta showed real
+    % but non-monotonic sensitivity, not a usable dial).
+    if ~exist('wage_lamda','var'); wage_lamda=0.55; end
     if ~exist('wage_delta','var'); wage_delta=0.75; end
     alfa=wage_alfa;
     beta=wage_beta;
@@ -1313,6 +1349,8 @@ for i=1:steps
 
     elderly    = HH_data(:,5)>=2;
     nonelderly = ~elderly;
+    young_old  = HH_data(:,5)==3;
+    old_old    = HH_data(:,5)==6;
 
     % --- SA service ratio per HH (commercial-only dynamic col5) ---
     [~,locStat] = ismember(HH_data(:,1), stat_data(:,1));
@@ -1341,20 +1379,32 @@ for i=1:steps
     % SA service ratio by subgroup
     Metric_Track(i,2)  = mean(HH_service(elderly),    'omitnan');
     Metric_Track(i,3)  = mean(HH_service(nonelderly), 'omitnan');
+    Metric_Track(i,26) = mean(HH_service(young_old),  'omitnan');
+    Metric_Track(i,27) = mean(HH_service(old_old),    'omitnan');
 
     % Building service ratio by subgroup
     Metric_Track(i,4)  = mean(HH_build_svc(elderly),    'omitnan');
     Metric_Track(i,5)  = mean(HH_build_svc(nonelderly), 'omitnan');
+    Metric_Track(i,28) = mean(HH_build_svc(young_old),  'omitnan');
+    Metric_Track(i,29) = mean(HH_build_svc(old_old),    'omitnan');
 
     % Population counts
     Metric_Track(i,6)  = sum(elderly);
     Metric_Track(i,7)  = sum(nonelderly);
+    % 3-way split: HH_data(:,5) encodes 0=non-elderly, 3=young-old
+    % (65-69), 6=old-old (70+) -- confirmed by inspection (only those
+    % three values ever occur, and 3+6 sums exactly to the elderly
+    % count above). col6 above stays young-old+old-old combined.
+    Metric_Track(i,24) = sum(HH_data(:,5)==3); % young-old
+    Metric_Track(i,25) = sum(HH_data(:,5)==6); % old-old
 
     % --- possible assets metrics from Asset_Avail ---
-    % Asset_Avail cols: [HH_ID(1) isElderly(2) n_SA(3) n_city(4) tried_SA(5) tried_city(6) success_SA(7) success_city(8)]
+    % Asset_Avail cols: [HH_ID(1) ageGroup(2, 0=non-elderly/3=young-old/6=old-old) n_SA(3) n_city(4) tried_SA(5) tried_city(6) success_SA(7) success_city(8)]
     if size(Asset_Avail,1)>0
-        AA_E  = Asset_Avail(:,2)==1;
+        AA_E  = Asset_Avail(:,2)>=3; % elderly combined (young-old + old-old) -- unchanged semantics
         AA_NE = Asset_Avail(:,2)==0;
+        AA_YO = Asset_Avail(:,2)==3;
+        AA_OO = Asset_Avail(:,2)==6;
         AA_trSA   = Asset_Avail(:,5)==1;
         AA_trCity = Asset_Avail(:,6)==1;
         AA_sucSA  = Asset_Avail(:,7)==1;
@@ -1365,16 +1415,28 @@ for i=1:steps
         Metric_Track(i,9)  = sum(Asset_Avail(AA_NE & AA_trSA,   3), 'omitnan');
         Metric_Track(i,12) = sum(Asset_Avail(AA_E  & AA_trCity, 4), 'omitnan');
         Metric_Track(i,13) = sum(Asset_Avail(AA_NE & AA_trCity, 4), 'omitnan');
+        yo_sa_raw   = sum(Asset_Avail(AA_YO & AA_trSA,   3), 'omitnan');
+        oo_sa_raw   = sum(Asset_Avail(AA_OO & AA_trSA,   3), 'omitnan');
+        yo_city_raw = sum(Asset_Avail(AA_YO & AA_trCity, 4), 'omitnan');
+        oo_city_raw = sum(Asset_Avail(AA_OO & AA_trCity, 4), 'omitnan');
 
         % normalized (per attempting HH)
         n_SA_E  = sum(AA_E  & AA_trSA);
         n_SA_NE = sum(AA_NE & AA_trSA);
         n_Cy_E  = sum(AA_E  & AA_trCity);
         n_Cy_NE = sum(AA_NE & AA_trCity);
+        n_SA_YO = sum(AA_YO & AA_trSA);
+        n_SA_OO = sum(AA_OO & AA_trSA);
+        n_Cy_YO = sum(AA_YO & AA_trCity);
+        n_Cy_OO = sum(AA_OO & AA_trCity);
         if n_SA_E  >0; Metric_Track(i,10)=Metric_Track(i,8) /n_SA_E;  else; Metric_Track(i,10)=NaN; end
         if n_SA_NE >0; Metric_Track(i,11)=Metric_Track(i,9) /n_SA_NE; else; Metric_Track(i,11)=NaN; end
         if n_Cy_E  >0; Metric_Track(i,14)=Metric_Track(i,12)/n_Cy_E;  else; Metric_Track(i,14)=NaN; end
         if n_Cy_NE >0; Metric_Track(i,15)=Metric_Track(i,13)/n_Cy_NE; else; Metric_Track(i,15)=NaN; end
+        if n_SA_YO >0; Metric_Track(i,30)=yo_sa_raw/n_SA_YO;     else; Metric_Track(i,30)=NaN; end
+        if n_SA_OO >0; Metric_Track(i,31)=oo_sa_raw/n_SA_OO;     else; Metric_Track(i,31)=NaN; end
+        if n_Cy_YO >0; Metric_Track(i,32)=yo_city_raw/n_Cy_YO;   else; Metric_Track(i,32)=NaN; end
+        if n_Cy_OO >0; Metric_Track(i,33)=oo_city_raw/n_Cy_OO;   else; Metric_Track(i,33)=NaN; end
 
         % attempt rate within SA: per-SA (SA attempts / HH in SA for subgroup), then averaged
         [~,locAA] = ismember(Asset_Avail(:,1), HH_data(:,2));
@@ -1384,34 +1446,52 @@ for i=1:steps
         AA_sa_id(~valid_loc) = -1; % sentinel: won't match any real SA
         rate_SA_E  = NaN(length(g_sa),1);
         rate_SA_NE = NaN(length(g_sa),1);
+        rate_SA_YO = NaN(length(g_sa),1);
+        rate_SA_OO = NaN(length(g_sa),1);
         for g_idx = 1:length(g_sa)
             g_id = g_sa(g_idx);
             e_in_SA  = sum(HH_data(:,1)==g_id & elderly);
             ne_in_SA = sum(HH_data(:,1)==g_id & nonelderly);
+            yo_in_SA = sum(HH_data(:,1)==g_id & young_old);
+            oo_in_SA = sum(HH_data(:,1)==g_id & old_old);
             e_tried  = sum(AA_sa_id==g_id & AA_E  & AA_trSA);
             ne_tried = sum(AA_sa_id==g_id & AA_NE & AA_trSA);
+            yo_tried = sum(AA_sa_id==g_id & AA_YO & AA_trSA);
+            oo_tried = sum(AA_sa_id==g_id & AA_OO & AA_trSA);
             if e_in_SA  >0; rate_SA_E(g_idx) =e_tried /e_in_SA;  end
             if ne_in_SA >0; rate_SA_NE(g_idx)=ne_tried/ne_in_SA; end
+            if yo_in_SA >0; rate_SA_YO(g_idx)=yo_tried/yo_in_SA; end
+            if oo_in_SA >0; rate_SA_OO(g_idx)=oo_tried/oo_in_SA; end
         end
         Metric_Track(i,16) = mean(rate_SA_E,  'omitnan');
         Metric_Track(i,17) = mean(rate_SA_NE, 'omitnan');
+        Metric_Track(i,34) = mean(rate_SA_YO, 'omitnan');
+        Metric_Track(i,35) = mean(rate_SA_OO, 'omitnan');
 
         % attempt rate within city: citywide attempts / total subgroup HH
         n_eld = sum(elderly); n_ne = sum(nonelderly);
+        n_yo = sum(young_old); n_oo = sum(old_old);
         if n_eld>0; Metric_Track(i,18)=sum(AA_E &AA_trCity)/n_eld; else; Metric_Track(i,18)=NaN; end
         if n_ne >0; Metric_Track(i,19)=sum(AA_NE&AA_trCity)/n_ne;  else; Metric_Track(i,19)=NaN; end
+        if n_yo >0; Metric_Track(i,36)=sum(AA_YO&AA_trCity)/n_yo;  else; Metric_Track(i,36)=NaN; end
+        if n_oo >0; Metric_Track(i,37)=sum(AA_OO&AA_trCity)/n_oo;  else; Metric_Track(i,37)=NaN; end
 
         % success rate within SA
         if n_SA_E  >0; Metric_Track(i,20)=sum(AA_E &AA_trSA&AA_sucSA) /n_SA_E;  else; Metric_Track(i,20)=NaN; end
         if n_SA_NE >0; Metric_Track(i,21)=sum(AA_NE&AA_trSA&AA_sucSA) /n_SA_NE; else; Metric_Track(i,21)=NaN; end
+        if n_SA_YO >0; Metric_Track(i,38)=sum(AA_YO&AA_trSA&AA_sucSA) /n_SA_YO; else; Metric_Track(i,38)=NaN; end
+        if n_SA_OO >0; Metric_Track(i,39)=sum(AA_OO&AA_trSA&AA_sucSA) /n_SA_OO; else; Metric_Track(i,39)=NaN; end
 
         % success rate within city
         if n_Cy_E  >0; Metric_Track(i,22)=sum(AA_E &AA_trCity&AA_sucCity)/n_Cy_E;  else; Metric_Track(i,22)=NaN; end
         if n_Cy_NE >0; Metric_Track(i,23)=sum(AA_NE&AA_trCity&AA_sucCity)/n_Cy_NE; else; Metric_Track(i,23)=NaN; end
+        if n_Cy_YO >0; Metric_Track(i,40)=sum(AA_YO&AA_trCity&AA_sucCity)/n_Cy_YO; else; Metric_Track(i,40)=NaN; end
+        if n_Cy_OO >0; Metric_Track(i,41)=sum(AA_OO&AA_trCity&AA_sucCity)/n_Cy_OO; else; Metric_Track(i,41)=NaN; end
     else
         Metric_Track(i,8:23) = NaN;
         Metric_Track(i,8)=0; Metric_Track(i,9)=0;
         Metric_Track(i,12)=0; Metric_Track(i,13)=0;
+        Metric_Track(i,30:41) = NaN;
     end
 
     
