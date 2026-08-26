@@ -216,8 +216,9 @@ public_bldg_usable_fraction=0.4;
 % restrict_public_shelters_to_schools: toggle - if true, only usage=8
 % (school) buildings are eligible for the public/school shelter tier
 % (excludes usage=5 generic public entirely). Lets "all public buildings"
-% vs. "schools only" be compared as different policy runs.
-restrict_public_shelters_to_schools=0;
+% vs. "schools only" be compared as different policy runs. Default policy:
+% schools only.
+restrict_public_shelters_to_schools=1;
 % outside_commute_penalty_pct: stylized flat income haircut applied to
 % households sheltered outside the city (shelter-overflow pool), standing
 % in for a computed commute cost. Placeholder value - not yet set through
@@ -239,8 +240,15 @@ n_temp_dev_sites=3; % fixed count - not derived from the destroyed-building set
 % out-of-city overflow) at the moment the sites open, split evenly across
 % n_temp_dev_sites. Not tied to any building's floor area - these aren't
 % buildings. Easily-tunable placeholder, not yet set through sensitivity
-% testing.
-temp_dev_capacity_frac=0.75;
+% testing. Overridable (like city/steps/shock_step) so a caller can define
+% policy-comparison scenarios without editing this file:
+%   - "limited capacity" scenario: 0.75 (default below)
+%   - "everyone gets sheltered" scenario: 1.0 - note the per-site greedy
+%     fill (see the transfer block below) isn't optimal bin-packing, so at
+%     very large populations a handful of people could still miss by a
+%     site-boundary rounding edge; negligible relative to typical
+%     population sizes.
+if ~exist('temp_dev_capacity_frac','var'); temp_dev_capacity_frac=0.75; end
 % temp_dev_site_coords: optional user-supplied [X,Y] real-world staging
 % locations, one row per site (n_temp_dev_sites x 2). Leave empty to fall
 % back to a data-driven siting proxy (see site_temp_dev_locations.m) -
@@ -435,11 +443,22 @@ for g=1:length(g_sa)
 end
 
 destroyed_B=[];
+bad_Assets=[]; % pool of destroyed dwelling-unit assets, persists across
+% steps like destroyed_B - MUST be initialized once here, not reset every
+% step inside the loop, or the per-step recovery block (which restores an
+% asset once its building recovers) only ever gets one chance to act (the
+% step immediately after shock_A first populates it) before losing track
+% of every not-yet-recovered asset for good.
 HH_track=zeros(0,2); % [HH_ID, subsidy_start_step] - HH_subsidy.m tracker
 Shelters=[];
 Shelter_Assign=[];
 Shelter_Building_Routines={};
 Sheltered_Outside=zeros(0,3); % [HH_ID, start_step, income_penalty_amount] - shelter-overflow pool
+Outside_Activity_Backup=zeros(0,2); % [agent_id, original_number_of_activities] - for
+% working out-of-city commuters (see item 3 wiring below), col(20) gets
+% reduced by outside_commute_penalty_pct while they're outside; this
+% backs up the pre-reduction value so it can be restored exactly on exit,
+% same pattern as Sheltered_Outside col(3) restoring the income penalty.
 Temp_Dev_Sites=zeros(0,6); % [site_id, X, Y, capacity, start_step, end_step] - medium-term sheltering spaces (never a Build_Data row - see site_temp_dev_locations.m)
 Temp_Dev_Assign=zeros(0,2); % [agent_id, site_id]
 temp_dev_spawned=false; % one-time flag: sites open at shock_step+temp_dev_delay
@@ -487,15 +506,30 @@ for i=1:steps
         end      
         Work_places=new_works_after_recovery(Work_places,Build_Data,BI,average_wage,std_wage);
         if displaced_shelter==1 && ~isempty(Shelters)
-            [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id] = ...
+            [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, released_agents] = ...
                 release_shelter(Build_Data, Individuals_data, HH_data, Shelters, Shelter_Assign,...
                 Shelter_Building_Routines, Building_routine_id, Assets, BI, i);
+            routine_recompute_ids = [routine_recompute_ids; released_agents]; % no override - HH_data is correct again
         end
         if displaced_shelter==1 && ~isempty(Sheltered_Outside)
-            [HH_data, Sheltered_Outside] = release_outside_shelter(HH_data, Assets, BI, Sheltered_Outside);
+            [HH_data, Sheltered_Outside, released_hh] = release_outside_shelter(HH_data, Assets, BI, Sheltered_Outside);
+            if ~isempty(released_hh)
+                released_out_agents = Individuals_data(ismember(Individuals_data(:,3), released_hh), 1);
+                % restore any reduced number_of_activities from entry, then
+                % forget the backup entry
+                [has_backup, locBk] = ismember(released_out_agents, Outside_Activity_Backup(:,1));
+                if any(has_backup)
+                    ra_working = released_out_agents(has_backup);
+                    [~, locIA] = ismember(ra_working, Individuals_data(:,1));
+                    Individuals_data(locIA,20) = Outside_Activity_Backup(locBk(has_backup),2);
+                    Outside_Activity_Backup(locBk(has_backup),:) = [];
+                end
+                routine_recompute_ids = [routine_recompute_ids; released_out_agents]; % no override - HH_data is correct again
+            end
         end
         if displaced_shelter==1 && ~isempty(Temp_Dev_Assign)
-            [Temp_Dev_Assign, ~] = release_temp_dev(Individuals_data, HH_data, Assets, BI, Temp_Dev_Assign);
+            [Temp_Dev_Assign, released_td_agents] = release_temp_dev(Individuals_data, HH_data, Assets, BI, Temp_Dev_Assign);
+            routine_recompute_ids = [routine_recompute_ids; released_td_agents]; % no override - HH_data is correct again
         end
     end
 
@@ -576,17 +610,32 @@ for i=1:steps
                     end
                 else
                     % coming from the out-of-city overflow pool - refund the
-                    % commute penalty, same amount deducted on entry
+                    % commute penalty, same amount deducted on entry, and
+                    % restore any reduced number_of_activities (they're
+                    % moving to a LOCAL tier now, not commuting in)
                     hh_row = find(HH_data(:,2)==hh_id, 1);
                     os_row = find(Sheltered_Outside(:,1)==hh_id, 1);
                     if ~isempty(hh_row) && ~isempty(os_row)
                         HH_data(hh_row,6) = HH_data(hh_row,6) + Sheltered_Outside(os_row,3);
                     end
                     Sheltered_Outside(Sheltered_Outside(:,1)==hh_id,:) = [];
+                    [has_backup, locBk] = ismember(hh_agents, Outside_Activity_Backup(:,1));
+                    if any(has_backup)
+                        ra_working = hh_agents(has_backup);
+                        [~, locIA] = ismember(ra_working, Individuals_data(:,1));
+                        Individuals_data(locIA,20) = Outside_Activity_Backup(locBk(has_backup),2);
+                        Outside_Activity_Backup(locBk(has_backup),:) = [];
+                    end
                 end
 
                 Temp_Dev_Assign = [Temp_Dev_Assign; [hh_agents, repmat(site_id, n_needed, 1)]];
                 site_remaining(next_site) = site_remaining(next_site) - n_needed;
+
+                % recompute this household's routine anchored on the site
+                % itself ("shelter as home" - item 2)
+                site_row = find(Temp_Dev_Sites(:,1)==site_id, 1);
+                routine_recompute_ids = [routine_recompute_ids; hh_agents];
+                routine_home_override = [routine_home_override; hh_agents, repmat(Temp_Dev_Sites(site_row,2:3), n_needed, 1)];
             end
         end
     end
@@ -616,8 +665,37 @@ for i=1:steps
                 HH_data(hh_row,6) = HH_data(hh_row,6) - penalty;
                 Sheltered_Outside = [Sheltered_Outside; hh_id, i, penalty];
 
-                a_idx = ismember(Building_routine_id(:,1), hh_agents);
-                Building_routine_id(a_idx, 4:end) = NaN;
+                % same working/non-working split as the shock-time overflow
+                % path above - see its comment for the full rationale
+                [~, locAg] = ismember(hh_agents, Individuals_data(:,1));
+                is_working = Individuals_data(locAg,12)==2 & Individuals_data(locAg,17)>0 & Individuals_data(locAg,17)~=99;
+                working_agents = hh_agents(is_working);
+                nonworking_agents = hh_agents(~is_working);
+
+                if ~isempty(working_agents)
+                    [~, locWA] = ismember(working_agents, Individuals_data(:,1));
+                    [foundWp, locWp] = ismember(Individuals_data(locWA,17), Work_places(:,6));
+                    % a recorded work_place_id can point at a slot that's
+                    % already been removed from Work_places elsewhere this
+                    % same step (e.g. the land-use job-loss cleanup) -
+                    % agents with no locatable workplace fall through to
+                    % the non-working (blunt suppression) treatment instead
+                    nonworking_agents = [nonworking_agents; working_agents(~foundWp)];
+                    working_agents = working_agents(foundWp);
+                    locWA = locWA(foundWp);
+                    locWp = locWp(foundWp);
+                    if ~isempty(working_agents)
+                        wp_xy = Work_places(locWp,3:4);
+                        Outside_Activity_Backup = [Outside_Activity_Backup; working_agents, Individuals_data(locWA,20)];
+                        Individuals_data(locWA,20) = round(Individuals_data(locWA,20) * (1-outside_commute_penalty_pct));
+                        routine_recompute_ids = [routine_recompute_ids; working_agents];
+                        routine_home_override = [routine_home_override; working_agents, wp_xy];
+                    end
+                end
+                if ~isempty(nonworking_agents)
+                    a_idx = ismember(Building_routine_id(:,1), nonworking_agents);
+                    Building_routine_id(a_idx, 4:end) = NaN;
+                end
             end
         end
         Temp_Dev_Sites(Temp_Dev_Sites(:,6)==0, 6) = i; % stamp end step on whichever sites are still open
@@ -640,7 +718,15 @@ for i=1:steps
     Floor_Size=sum(Build_Data(a,7).*ceil(Build_Data(a,11))); % floor size for building with usage (area*floors)
     LU=[];new_A=[];new_B=[];HH_change=[];
     new_jobs_work_places=[];HH_ID_left=[];lost_job_id=[];closed_wp_ids_today=[];
-    HH_destroyed=[];bad_Assets=[];lost_jobs=[];Ind_change_routine=[];
+    HH_destroyed=[];lost_jobs=[];Ind_change_routine=[]; % NOT bad_Assets - see its init comment above, must persist across steps
+    % routine_recompute_ids/routine_home_override: agents whose routine
+    % needs recomputing this step because their shelter status just
+    % changed (entered/left immediate tier, temp-dev, or out-of-city),
+    % and where to anchor that recompute instead of their (possibly
+    % stale) HH_data home - see the shelter/temp-dev/outside blocks below
+    % and design items 2-3 in team_lead_status.md.
+    routine_recompute_ids=[];
+    routine_home_override=zeros(0,3);
     max_salary = max(Work_places(:,8));
     row = find(Work_places(:,8) == max_salary); % index fo max salary
     max_WP_id=Work_places(row(1),6); % id of workplace with max salary
@@ -664,10 +750,14 @@ for i=1:steps
         [Individuals_data,Ind_change_routine]=shock_I(Individuals_data,lost_jobs);
 
         if displaced_shelter==1 && ~isempty(HH_destroyed)
-            [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, unsheltered_agents] = ...
+            [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, unsheltered_agents, newly_assigned] = ...
                 assign_shelter(Build_Data, Individuals_data, HH_destroyed, Shelters, Shelter_Assign,...
                 Shelter_Building_Routines, Building_routine_id, i, agents_per_sqm, public_bldg_usable_fraction, ...
                 restrict_public_shelters_to_schools, hotel_room_density, agents_per_room);
+            if ~isempty(newly_assigned)
+                routine_recompute_ids = [routine_recompute_ids; newly_assigned(:,1)];
+                routine_home_override = [routine_home_override; newly_assigned];
+            end
 
             % Shelter capacity exhausted: leftover displaced households are
             % "sheltered outside the city" instead of being deleted - see
@@ -687,12 +777,42 @@ for i=1:steps
                     HH_data(hh_row,6) = HH_data(hh_row,6) - penalty;
                     Sheltered_Outside = [Sheltered_Outside; hh_id, i, penalty];
 
-                    % work-only routine: suppress local (non-work) activity
-                    % locations for this household's agents - col(3) is the
-                    % work location, cols(4:end) are the "other" activities
+                    % Working members: routine recomputed anchored on their
+                    % WORKPLACE instead of their (destroyed) home - "starts
+                    % at their workplace" - with number_of_activities
+                    % reduced by outside_commute_penalty_pct to reflect the
+                    % time/opportunity cost of commuting in (backed up in
+                    % Outside_Activity_Backup for exact restoration on
+                    % exit). Non-working members have no reason to be in
+                    % the city at all - kept on the original blunt
+                    % suppression (no local activities).
                     hh_agents = Individuals_data(Individuals_data(:,3)==hh_id, 1);
-                    a_idx = ismember(Building_routine_id(:,1), hh_agents);
-                    Building_routine_id(a_idx, 4:end) = NaN;
+                    [~, locAg] = ismember(hh_agents, Individuals_data(:,1));
+                    is_working = Individuals_data(locAg,12)==2 & Individuals_data(locAg,17)>0 & Individuals_data(locAg,17)~=99;
+                    working_agents = hh_agents(is_working);
+                    nonworking_agents = hh_agents(~is_working);
+
+                    if ~isempty(working_agents)
+                        [~, locWA] = ismember(working_agents, Individuals_data(:,1));
+                        [foundWp, locWp] = ismember(Individuals_data(locWA,17), Work_places(:,6));
+                        % see the shock-time overflow path above for why
+                        % this guard is needed
+                        nonworking_agents = [nonworking_agents; working_agents(~foundWp)];
+                        working_agents = working_agents(foundWp);
+                        locWA = locWA(foundWp);
+                        locWp = locWp(foundWp);
+                    end
+                    if ~isempty(working_agents)
+                        wp_xy = Work_places(locWp,3:4);
+                        Outside_Activity_Backup = [Outside_Activity_Backup; working_agents, Individuals_data(locWA,20)];
+                        Individuals_data(locWA,20) = round(Individuals_data(locWA,20) * (1-outside_commute_penalty_pct));
+                        routine_recompute_ids = [routine_recompute_ids; working_agents];
+                        routine_home_override = [routine_home_override; working_agents, wp_xy];
+                    end
+                    if ~isempty(nonworking_agents)
+                        a_idx = ismember(Building_routine_id(:,1), nonworking_agents);
+                        Building_routine_id(a_idx, 4:end) = NaN;
+                    end
                 end
             end
         end
@@ -726,7 +846,7 @@ for i=1:steps
     if isempty(moving_HH)==0 % assign new asset for agent
         [HH_ID_left,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data]...
             =find_new_house_same_stat(HH_ID_left,pd,HH_data,Individuals_data, ...
-            Build_Data,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change);
+            Build_Data,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,bad_Assets);
 
     end
 
@@ -735,7 +855,7 @@ for i=1:steps
     if isempty(moving_HH)==0
         [HH_ID_left,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data]= ...
             find_new_house_yeshuv(HH_ID_left,pd,HH_data,Individuals_data,Build_Data ...
-            ,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change);
+            ,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,bad_Assets);
     end
 
 
@@ -982,7 +1102,7 @@ for i=1:steps
                 [HH_ID_left,HH_data,Assets,HH_change,LU,...
                     new_A,new_B,Build_Data]...
                     =find_new_house_same_stat(HH_ID_left,pd,HH_data,Individuals_data,Build_Data,...
-                    Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change);
+                    Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,bad_Assets);
             end
             %saves HH that leave simulation before they are deleted
 
@@ -1101,21 +1221,31 @@ for i=1:steps
     
     %% number of routine per person
     [Individuals_data,id]=new_number_of_routine(Individuals_data,acts,wactsnum,agent_rot,HH_change,routine,Ind_change_routine);
-    
+    % include agents whose shelter status changed this step (entered/left
+    % immediate tier, temp-dev, or out-of-city) - see routine_recompute_ids
+    % population above - so their routine gets rebuilt around where
+    % they're actually staying instead of a stale location.
+    id=unique([id;routine_recompute_ids]);
+
     %% new activities locations
     if size(id,1)>0
-        [Building_routine_id]=find_activity_location_new_A(Individuals_data,Build_Data,Work_places,HH_data,wact1,wact2,wactsnum,SA,id,Building_routine_id);
+        [Building_routine_id]=find_activity_location_new_A(Individuals_data,Build_Data,Work_places,HH_data,wact1,wact2,wactsnum,SA,id,Building_routine_id,routine_home_override);
         a=ismember(Building_routine_id(:,1),Individuals_data(:,1)); % match agent ID
         Building_routine_id(a==0,:)=[]; % remove unmatched IDs
     end
 
     % Sheltered_Outside HH: re-suppress local (non-work) routine every
-    % step, in case the routine engine reassigned local activities to
-    % them above for an unrelated reason (e.g. a job status change).
+    % step for NON-working members only, in case the routine engine
+    % reassigned local activities to them above for an unrelated reason.
+    % Working members keep their real (reduced, workplace-anchored)
+    % routine from item 3 above - re-NaNing them here would undo that.
     % Work location (col 3) is left untouched - job continuity.
     if ~isempty(Sheltered_Outside)
         outside_agents = Individuals_data(ismember(Individuals_data(:,3), Sheltered_Outside(:,1)), 1);
-        a_idx = ismember(Building_routine_id(:,1), outside_agents);
+        [~, locOA] = ismember(outside_agents, Individuals_data(:,1));
+        is_working = Individuals_data(locOA,12)==2 & Individuals_data(locOA,17)>0 & Individuals_data(locOA,17)~=99;
+        outside_nonworking = outside_agents(~is_working);
+        a_idx = ismember(Building_routine_id(:,1), outside_nonworking);
         Building_routine_id(a_idx, 4:end) = NaN;
     end
 
@@ -1231,7 +1361,7 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             subsidy_residents subsidy_businesses subsidy_amount subsidy_duration HH_track...
             outside_commute_penalty_pct Sheltered_Outside temp_dev_delay temp_dev_duration...
             n_temp_dev_sites temp_dev_capacity_frac temp_dev_site_coords Temp_Dev_Sites Temp_Dev_Assign...
-            sumdata destroyed_B RECOVERY
+            sumdata destroyed_B RECOVERY bad_Assets
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk),' ',run_uid]);
 save(full_file_name);
 end

@@ -1,8 +1,13 @@
-function [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id] = release_shelter( ...
+function [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, released_agents] = release_shelter( ...
     Build_Data, Individuals_data, HH_data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, Assets, recovered_bldgs, i)
 % Releases agents from shelter after home recovery or when new assets become
 % available. Agents are also released once their household secures any asset
 % from the available list. Shelters are closed if no agents remain.
+%
+% released_agents: every agent ID released this call, across all shelter
+% buildings - for the caller to trigger a routine recompute back onto
+% their (now-correct) HH_data home.
+    released_agents = [];
     for sidx = size(Shelters,1):-1:1
         b_id = Shelters(sidx,1);
 
@@ -36,6 +41,7 @@ function [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Build
                 end
             end
         end
+        released_agents = [released_agents; agents_to_release];
         % Remove released agents from assignment
         for r = 1:length(agents_to_release)
             idx = (Shelter_Assign(:,1)==agents_to_release(r)) & (Shelter_Assign(:,2)==b_id);

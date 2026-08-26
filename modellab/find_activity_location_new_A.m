@@ -1,4 +1,10 @@
-function [BU1]=find_activity_location_new_A(Individuals_data,Build_Data,Work_places,HH_data,Wact1,Wact2,wactsnum,SA_data,id,BU)
+function [BU1]=find_activity_location_new_A(Individuals_data,Build_Data,Work_places,HH_data,Wact1,Wact2,wactsnum,SA_data,id,BU,home_override)
+% home_override: [agent_id, X, Y] - overrides the "home" anchor used below
+% for routine (non-work activity) location choice, for agents whose
+% HH_data-derived home doesn't reflect where they're actually staying
+% (sheltered agents - HH_data is deliberately never repointed away from a
+% destroyed home, see the sheltering header comment in the main script).
+% Agents not present here fall through to the normal HH_data lookup.
 
 BU1=BU; % building usage - Building_routine_id
 BU1(ismember(BU(:,1),id),:)=[]; % match agent ID
@@ -21,6 +27,17 @@ locB(locB==0)=[];
 X=Build_Data(locB,5);
 Y=Build_Data(locB,6);
 BU=Build_Data(locB,1);
+
+if ~isempty(home_override)
+    [~, locO] = ismember(Individuals_data(:,1), home_override(:,1));
+    ov = locO>0;
+    X(ov) = home_override(locO(ov),2);
+    Y(ov) = home_override(locO(ov),3);
+    % BU(:,1) [home building id] intentionally left unchanged here - a
+    % temp-dev site has no Build_Data row at all, and even for immediate-
+    % tier shelters (real buildings) that column isn't used for anything
+    % besides distance-based scoring downstream, which reads X/Y only.
+end
 
 % second location - work
 [locA,~] = ismember(Individuals_data(:,17),Work_places(:,6)); % index of wp for each individual

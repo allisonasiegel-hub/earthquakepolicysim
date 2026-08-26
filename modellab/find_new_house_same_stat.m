@@ -1,6 +1,6 @@
 function [HH_ID,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data]...
     =find_new_house_same_stat(HH_ID,pd,HH_data,Individuals_data,Build_Data,...
-    Build_Distance_matrix_400,Assets,wresd,FFF1,LU,new_A,new_B,HH_change)
+    Build_Distance_matrix_400,Assets,wresd,FFF1,LU,new_A,new_B,HH_change,bad_Assets)
 
 for j=1:size(FFF1,1)
     lu=[];
@@ -12,9 +12,27 @@ for j=1:size(FFF1,1)
     income=HH_data(FFF,6); %income
     Yeshuv=HH_data(FFF,9);% yeshuv
     IX=1;
-    possible_assets=Assets(Assets(:,1)==SA & Assets(:,11)==0 & Assets(:,13)<=0.33*income ,:); % same SA ; empty asset ; greater then income threshold
-    possible_assets_Y=Assets(Assets(:,1)~=SA & Assets(:,6)==Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:); % other SA ; same yeshuv ; empty asset ; greater then income threshold
-    possible_assets_O=Assets(Assets(:,1)~=SA & Assets(:,6)~=Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:); % other SA ; other yeshuv ; empty asset ; greater then income threshold
+
+    % A displaced/sheltered household's HH_data still points at its
+    % original (destroyed) asset - if that asset is currently sitting in
+    % bad_Assets (not yet recovered), use its former monthly cost (col 13)
+    % as an ADDITIONAL affordability reference alongside current income:
+    % the household's post-disaster income figure may understate what
+    % they can actually afford (temporary income disruption, insurance,
+    % savings, family support), but what they were already paying before
+    % the shock is a stable anchor. Only ever raises the ceiling, never
+    % lowers it - a household is never worse off for this.
+    prev_cost = 0;
+    if ~isempty(bad_Assets)
+        prev_row = find(bad_Assets(:,3)==HH_data(FFF,11), 1);
+        if ~isempty(prev_row)
+            prev_cost = bad_Assets(prev_row,13);
+        end
+    end
+
+    possible_assets=Assets(Assets(:,1)==SA & Assets(:,11)==0 & Assets(:,13)<=max(0.33*income,prev_cost) ,:); % same SA ; empty asset ; greater then income threshold
+    possible_assets_Y=Assets(Assets(:,1)~=SA & Assets(:,6)==Yeshuv & Assets(:,11)==0 & Assets(:,13)<=max(IX*income,prev_cost),:); % other SA ; same yeshuv ; empty asset ; greater then income threshold
+    possible_assets_O=Assets(Assets(:,1)~=SA & Assets(:,6)~=Yeshuv & Assets(:,11)==0 & Assets(:,13)<=max(IX*income,prev_cost),:); % other SA ; other yeshuv ; empty asset ; greater then income threshold
 
     % Only assets in buildings still zoned residential (usage 1 or 2,
     % matching SA_RESIDENT's own definition) are habitable - a building

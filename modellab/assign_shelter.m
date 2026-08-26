@@ -1,10 +1,10 @@
-function [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, unsheltered_agents] = assign_shelter( ...
+function [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, unsheltered_agents, newly_assigned] = assign_shelter( ...
     Build_Data, Individuals_data, HH_destroyed, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, i, ...
     agents_per_sqm, public_bldg_usable_fraction, restrict_public_shelters_to_schools, hotel_room_density, agents_per_room)
 % Assigns displaced agents to public buildings/schools AND hotels (as
 % shelters) after attack - the "immediate" sheltering tier. Both are
-% tried as one combined candidate pool (public/school tier first, then
-% hotels, by concatenation order - no other priority between them).
+% tried as one combined candidate pool, hotels first, then public/school,
+% by concatenation order.
 %
 % Public/school tier capacity: agents_per_sqm * public_bldg_usable_fraction
 % * Area * floors. public_bldg_usable_fraction accounts for the fact that
@@ -30,7 +30,13 @@ function [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Build
 % unsheltered_agents (optional output, existing callers requesting fewer
 % outputs are unaffected): displaced agents left over once available
 % shelter buildings run out - i.e. shelter capacity exhausted.
+%
+% newly_assigned: [agent_id, X, Y] for every agent placed into a shelter
+% this call - the shelter building's own location, for the caller to
+% trigger a routine recompute anchored on the shelter instead of the
+% agent's (destroyed) home.
 
+    newly_assigned = zeros(0,3);
     if restrict_public_shelters_to_schools
         public_tier_buildings = Build_Data(Build_Data(:,3)==8, :); % schools only
     else
@@ -44,7 +50,7 @@ function [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Build
     end
     available_public = setdiff(public_tier_buildings(:,1), shelter_ids);
     available_hotel = setdiff(hotel_buildings(:,1), shelter_ids);
-    available = [available_public; available_hotel];
+    available = [available_hotel; available_public]; % hotels tried first, then public/school
     % Get list of all displaced agent IDs
     displaced_agents = [];
     for hidx = 1:length(HH_destroyed)
@@ -71,6 +77,7 @@ function [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Build
         Build_Data(row,3) = 99;
         Shelters = [Shelters; b_id, i, 0, original_usage]; % [b_id, start_step, end_step=0, original_usage]
         Shelter_Assign = [Shelter_Assign; [assigned_agents, repmat(b_id, n_assign, 1)]];
+        newly_assigned = [newly_assigned; assigned_agents, repmat(Build_Data(row,5:6), n_assign, 1)];
 
         % Optional: Remove shelter from routines of all agents visiting it
         agents_with_b = find(any(Building_routine_id(:,2:end)==b_id,2));
