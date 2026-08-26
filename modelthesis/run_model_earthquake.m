@@ -101,8 +101,24 @@ if ~exist('steps','var'); steps=100; end % allow a sweep driver to pre-set this 
 % wave-count controls; earthquake severity comes from the per-SA damage
 % table passed to earth_quake() instead, see the shock block below)
 shock=0;
-shock_step=900;
-RECOVERY = 0.01;
+if ~exist('shock_step','var'); shock_step=900; end % allow a sweep driver to pre-set this to actually trigger the shock
+% RECOVERY: daily per-building probability of recovering from earthquake
+% damage. Ported from modellab/run_model_earthquake_shelteroverflow.m
+% (git history, commit e2ed492 -- that path no longer exists in the
+% current tree but the commit is still reachable), rescaled from that
+% script's weekly step to this script's daily step: real reconstruction-
+% timeline data shows 31.35% of residential housing recovers within 1
+% year, so solving 1-(1-p)^365=0.3135 for p gives the daily-equivalent
+% probability below (modellab solved 1-(1-p)^52=0.3135 since its loop
+% steps in weeks). Each still-destroyed building gets an independent
+% Bernoulli draw every day, memoryless -- replaces the old deterministic
+% shared-countdown mechanism, where every destroyed building recovered
+% at exactly the same step count regardless of size (size canceled out
+% of the old threshold formula), producing a step function rather than a
+% curve. Applied uniformly to all building types by default; the
+% priority_recovery/recovery_factor toggle below still works for a
+% residential recovery bonus.
+RECOVERY = 1 - (1-0.3135)^(1/365);
 %% Polocies
 subsidy_businesses=0; % help business during
 subsidy_residents=0; % toggle: 0=off (baseline), 1=on
@@ -116,12 +132,46 @@ w_subsidy_eld=0.5;
 subsidy_duration=60;
 priority_recovery=0; % faster recovery of residential
 recovery_factor=2.5;
-displaced_shelter=1; % toggle: 0=off (baseline), 1=on - shelter policy of public turn to 99
+% toggle: 0=off (pure shock, no shelter intervention), 1=on (shelter
+% policy of public turn to 99). Settable from run_earthquake_setting.m
+% (guard added so a sweep/test driver can pre-set this before run()).
+if ~exist('displaced_shelter','var'); displaced_shelter=1; end
 agents_per_sqm=0.2;
 % max_shelter_duration: hard cap (steps) on how long a household may stay
 % sheltered before being forced to relocate-or-leave. Placeholder value -
 % not yet set through sensitivity testing.
 max_shelter_duration=120;
+
+% Staggered relocation eligibility: previously, every displaced household
+% entered the SAME-DAY housing search (moving_HH) on the exact shock day
+% -- unrealistic, since finding/touring/arranging a new home takes real
+% time even when a qualifying unit exists (confirmed empirically: ~85-90%
+% of displaced households were matching same-day). Real disaster-
+% displacement data doesn't follow a single constant daily "resolve"
+% rate either -- it shows a fast-resolving majority plus a much slower
+% "chronically displaced" minority (a well-documented pattern in the
+% literature, not unique to one event). Modeled here as a two-population
+% Bernoulli mixture: each displaced household is assigned (once, at the
+% moment of displacement) to a "fast" or "slow" mover population, then
+% draws daily against that population's fixed probability until it
+% succeeds, at which point it enters the normal moving_HH search pipeline
+% exactly as before (this only delays WHEN a household starts searching,
+% not how the search itself works). Calibrated via least-squares fit
+% (exact fit, 3 params/3 points) to the 2015 Nepal earthquake IDP
+% displacement-duration data (Nepal was the only quantitative source
+% found in this session -- >35% still displaced at 2wk, 13-33% at 5-6wk,
+% 7-15% at 13wk; the true model-relevant target is Tiberias/Israel-
+% specific data, not yet found -- treat this as a placeholder pending
+% better data, not a validated calibration).
+% use_staggered_relocation: 0=off (original behavior -- every displaced
+% household enters moving_HH the same day, HH_destroyed feeds it
+% directly), 1=on (fast/slow Bernoulli mixture above). Toggle so the two
+% can be run and compared directly rather than one replacing the other.
+if ~exist('use_staggered_relocation','var'); use_staggered_relocation=1; end
+if ~exist('relocation_w_slow','var'); relocation_w_slow=0.3947; end % fraction of displaced HH that are 'slow' movers
+if ~exist('relocation_p_slow','var'); relocation_p_slow=0.01394; end % daily eligibility probability, slow movers
+if ~exist('relocation_p_fast','var'); relocation_p_fast=0.20199; end % daily eligibility probability, fast movers
+if ~exist('pending_relocation','var'); pending_relocation=zeros(0,2); end % [HH_ID, is_slow]
 commercial_preservation=0;
 residential_preservation=0;
 
@@ -177,8 +227,45 @@ w_dis_job=0.5;
 if ~exist('wservice','var'); wservice=0; end % allow a sweep driver to pre-set this
 if ~exist('wservice_old','var'); wservice_old=wservice; end % service-preference weight for old-old (70+) HH specifically; defaults to the same value as wservice (young-old) so this is a no-op unless explicitly set higher
 
-if ~exist('eld_movef','var'); eld_movef=1; end %reduction in movement for elderly; allow a sweep driver to pre-set this
-if ~exist('svc_filter','var'); svc_filter=0; end % building service ratio filter for within-SA elderly pool (0=off, 1=on)
+% FINALIZED METHODOLOGY (locked in after the elderly_search_mode 1-6 +
+% eld_movef sensitivity testing): elderly_search_mode=2 (SA-level hard
+% filter + weighted SA pick for out-of-SA moves) produced the largest,
+% most statistically significant SA-service-ratio gain for BOTH young-
+% old and old-old of every mode tested (n=10 replicates, p<1e-7 both
+% groups vs baseline over the full 760-day average). eld_movef was
+% tested layered on top (0.33/0.5, 0.5/0.75, 0.6/0.8, 0.75/0.9) but
+% every reduction tested delayed young-old's SA-service crossover point
+% enough to drag the full-run average back to non-significance (young-
+% old starts BELOW non-elderly at t=0 and only crosses above around day
+% 120-180 in plain mode 2 -- any movement-probability reduction pushes
+% that crossover later, eating into more of the 760-day average).
+% eld_movef is therefore NOT part of the finalized methodology --
+% defaults left at 1 (no-op) below. Override explicitly if testing an
+% eld_movef combination for comparison.
+if ~exist('eld_movef','var'); eld_movef=1; end % movement-probability multiplier for young-old (65-69)
+if ~exist('eld_movef_old','var'); eld_movef_old=1; end % movement-probability multiplier for old-old (70+)
+if ~exist('svc_filter','var'); svc_filter=1; end % building service ratio filter for within-SA elderly pool (0=off, 1=on) -- mode 2's within-SA hard floor
+% elderly_search_mode: 0=off/legacy, 1=svc_filter's building-level filter
+% extended to out-of-SA pools too + weighted asset pick, 2=SA-level
+% filter (replaces the wservice/SA_score_old threshold) + weighted SA
+% pick for out-of-SA, 3=no filters anywhere, weighted SA pick (among
+% wservice/SA_score_old-eligible SAs) + weighted asset pick. See
+% find_new_house_sa_score.m's header for full definitions. Old-old leans
+% harder toward higher-service options than young-old in every weighted
+% pick (service_ratio^2 vs ^1).
+if ~exist('elderly_search_mode','var'); elderly_search_mode=2; end
+% BUG FIX: svc_filter=1 is mode 2/6's within-SA hard floor (see comment
+% above and find_new_house_sa_score.m's header) -- not an independent
+% toggle a caller can leave at 0 without silently breaking the finalized
+% mode-2/6 methodology. Every run_earthquake_setting.m call this session
+% explicitly passed svc_filter=0 (its 4th positional arg has no default,
+% so it always exists once passed, meaning the ~exist guard above never
+% caught this), so every elderly_search_mode=2 earthquake run so far was
+% missing its within-SA component. Enforced here unconditionally so this
+% can't be silently misconfigured again from any call site.
+if (elderly_search_mode==2 || elderly_search_mode==6) && svc_filter~=1
+    svc_filter=1;
+end
 if ~exist('sa_update_every','var'); sa_update_every=30; end % cadence (steps) for the SA_* macro-economic update block (price/wage/etc.) -- 30 = original monthly cadence; allow a sweep/testing driver to pre-set this
 % resSearchLen: max consecutive failed housing-search attempts before a HH
 % actually leaves the city (see HH_data col 13, set at load time above).
@@ -198,7 +285,13 @@ for i = 1:length(unique_values)
 end
 Build_Data=unique_matrix;					 
 
-%% near buildings 
+%% near buildings
+% RADIUS EXPERIMENT (service-radius-test branch): TRUE CONTROL - original,
+% unmodified radii (250/400), otherwise identical settings/rng-seeding to
+% the radius300/radius500 runs (svc_filter=1, elderly_search_mode=2,
+% corrected sa_update_every=1 defaults) so it isolates the radius change
+% alone, unlike baseline_full3way (which differs in elderly_search_mode
+% and land-use band too).
 Build_Distance_matrix_250=building_within_D(Build_Data,250);
 Build_Distance_matrix_400=building_within_D(Build_Data,400);
 
@@ -219,8 +312,13 @@ for hhhh = 1:size(Build_Data,1)
     if floorsize == 0
         floorsize=Build_Data(hhhh,7)*ceil(Build_Data(hhhh,11));
     end
-    Build_Data(hhhh,25)=floorsize;   
+    Build_Data(hhhh,25)=floorsize;
 end
+%% building service density (land-area, reporting-only) -- needs col(25)
+% floorspace, so this must run after the loop above, not alongside
+% building_service_ratio.m at line 271 (which runs before floorspace
+% exists). See building_service_density.m's header for full rationale.
+[Build_Data,Build_Data_p]=building_service_density(Build_Data,Build_Data_p,Build_Distance_matrix_400,400);
 Assets = mean_price_per_meter(Assets);
 
 %% stat service data
@@ -243,8 +341,8 @@ SA=SA_score(Build_Data);
 [Assets,Assets_P]=monthly_ass_cost(HH_data,Assets,Assets_P,Pa);
 %% working pre for people who are looking for jobs!
 ind=(Individuals_data(:,12)==1); % all unemployed
-R=rand(sum(ind),1); % random vector 
-Individuals_data(ind,18)=R; % random preference 
+R=rand(sum(ind),1); % random vector
+Individuals_data(ind,18)=R; % random preference
 Individuals_data(:,22)=0; % new col(22)
 Individuals_data_P=[Individuals_data_P,'ind_id_empty','time looking for job']; % header for what?
 %% Working out side world income
@@ -272,6 +370,36 @@ end
 
 % col(5) = dynamic commercial-only service ratio, recalculated every 30 steps
 stat_data(:,5) = stat_data(:,6);
+
+% col(7) = fixed real land area (m^2) per SA, from TVR/sa_land_area.csv
+% (derived from tveriashape/tveriastats.shp's Shape_Area field, EPSG:2039
+% -- a real meters-based projection for Israel). col(8) = SA-level
+% land-area service density: SA total commercial floorspace / col(7)
+% land area -- a supply-only measure, immune to the shock's effect on
+% residential stock (unlike col5/6, which divide by residential
+% floorspace/count and can rise mechanically when housing is destroyed
+% even if commercial supply itself didn't change). REPORTING-ONLY: does
+% NOT feed pref_hh.m/SA_score_old.m/elderly_search_mode/svc_filter at
+% all -- those still use col(5) unchanged, so elderly relocation
+% behavior is completely unaffected by this metric. Two SAs (67000017,
+% 67000035) aren't in the shapefile -- their land area (and therefore
+% density) is left NaN rather than fabricated.
+land_area_tbl = readtable([file,'TVR\sa_land_area.csv']);
+stat_data(:,7) = NaN;
+stat_data(:,8) = NaN;
+for g0 = 1:length(g_sa_init)
+    locLA = land_area_tbl.SAID == g_sa_init(g0);
+    if any(locLA)
+        la0_vals = land_area_tbl.land_area_m2(locLA);
+        la0 = la0_vals(1);
+        stat_data(stat_data(:,1)==g_sa_init(g0),7) = la0;
+        b0 = Build_Data(Build_Data(:,4)==g_sa_init(g0),:);
+        comm_floor0 = sum(b0(b0(:,3)>1 & b0(:,3)<4, 25)); % commercial floorspace (usage 2-3)
+        if la0>0
+            stat_data(stat_data(:,1)==g_sa_init(g0),8) = comm_floor0/la0;
+        end
+    end
+end
 
 service_mean = mean(stat_data(:,5));
 service_std  = std(stat_data(:,5));
@@ -357,11 +485,25 @@ HH_ORIGINAL = HH_data(:,[2 1 5]);
 % 2 = Original SA
 % 3 = Elderly count (HH_data(:,5)>=2)
 
+% Cols 7-8 added for the shock-displacement-rate-by-3-way-group analysis:
+% col 7 (OldOld_Count) lets a household that later LEAVES THE CITY still
+% be classified young-old vs old-old (HH_data itself only holds
+% currently-present households, so a left-city household's elderly
+% subtype would otherwise be unrecoverable -- Elderly_Count col 3 alone
+% only says "elderly", not which kind). col 8 (SA_at_3mo_snapshot) is a
+% one-time snapshot of each shock-displaced household's SA taken
+% shock_snapshot_days after the shock (see the shock block below) --
+% NaN for everyone else, -1 if the household had already left the city
+% by the snapshot day. Without this, there was no way to answer "where
+% was this household 3 months post-shock" -- only final-simulation-day
+% state was ever saved anywhere.
 HH_MOVE_TRACK = [...
     HH_ORIGINAL,...
     nan(size(HH_ORIGINAL,1),1),...   % Final SA
     zeros(size(HH_ORIGINAL,1),1),... % Displaced (0/1)
-    zeros(size(HH_ORIGINAL,1),1)];   % Left city (0/1)
+    zeros(size(HH_ORIGINAL,1),1),... % Left city (0/1)
+    HH_data(:,12),...                % OldOld_Count (0/1/2)
+    nan(size(HH_ORIGINAL,1),1)];     % SA_at_3mo_snapshot (shock-displaced HH only)
 
 
 HH_MOVE_TRACK_P = {
@@ -371,7 +513,9 @@ HH_MOVE_TRACK_P = {
 'Elderly_Count',...
 'Final_SA',...
 'Displaced',...
-'Left_City'
+'Left_City',...
+'OldOld_Count',...
+'SA_at_3mo_snapshot'
 
 };
 
@@ -382,6 +526,8 @@ HH_MOVE_TRACK_P = {
 % 4 Final SA
 % 5 Displaced
 % 6 Left city
+% 7 OldOld_Count
+% 8 SA_at_3mo_snapshot
 %% Time-series metrics
 
 % cols 24-25 added: young-old (HH_data col5==3) / old-old (col5==6)
@@ -393,7 +539,7 @@ HH_MOVE_TRACK_P = {
 % possible assets SA/city, attempt rate SA/city, success rate SA/city),
 % mirroring the existing elderly-combined columns (2,4,10,11,14,15,
 % 16-19,20-23) which are left unchanged.
-Metric_Track = nan(steps,41);
+Metric_Track = nan(steps,47);
 
 Metric_Track_P = {
 'Timestep',...
@@ -436,7 +582,13 @@ Metric_Track_P = {
 'SuccessRate_SA_YoungOld',...
 'SuccessRate_SA_OldOld',...
 'SuccessRate_City_YoungOld',...
-'SuccessRate_City_OldOld'
+'SuccessRate_City_OldOld',...
+'SAServiceDensity_NonElderly',...
+'SAServiceDensity_YoungOld',...
+'SAServiceDensity_OldOld',...
+'BuildingServiceDensity_NonElderly',...
+'BuildingServiceDensity_YoungOld',...
+'BuildingServiceDensity_OldOld'
 };
 
 elderly = HH_data(:,5)>=2;
@@ -498,22 +650,45 @@ for i=1:steps
 
     %% building movement - recovery, assets and work places
     if shock==1
-        recovery_rate=RECOVERY*ones(size(destroyed_B,1),1);    
+        % Independent per-building daily Bernoulli recovery draw -- see
+        % the RECOVERY definition above for the full derivation/ported-
+        % from note. usg reads destroyed_B col(4) (pre-shock usage,
+        % captured at the moment of destruction) rather than live
+        % Build_Data(:,3), since the latter is now 0 for every destroyed
+        % building regardless of type.
+        recovery_prob=RECOVERY*ones(size(destroyed_B,1),1);
         if priority_recovery==1
-            [~, idx_in_build]=ismember(destroyed_B(:,1),Build_Data(:,1));
-            usg=Build_Data(idx_in_build,3);          
-            recovery_rate(usg==1)=RECOVERY*recovery_factor; % priority for residential
-        end    
-        destroyed_B(:,2)=destroyed_B(:,2)+recovery_rate.*destroyed_B(:,3);    
-        f=destroyed_B(:,2)>=destroyed_B(:,3);
-        BI=destroyed_B(f,1); 
+            usg=destroyed_B(:,4);
+            recovery_prob(usg==1)=min(RECOVERY*recovery_factor,1); % priority for residential, clamped to a valid probability
+        end
+        f=rand(size(destroyed_B,1),1)<recovery_prob;
+        BI=destroyed_B(f,1);
+        orig_usage_recovered=destroyed_B(f,4);
         destroyed_B(f,:)=[]; % remove all recovered
-        if size(bad_Assets,1)>0 % bad assets remaining 
+        if size(bad_Assets,1)>0 % bad assets remaining
             loca=ismember(bad_Assets(:,2),BI); % indexes of recovered
             Assets=[Assets;bad_Assets(loca,:)]; % return recovered to avalible list
             bad_Assets(loca,:)=[]; % clear recovered
-        end      
+        end
         Work_places=new_works_after_recovery(Work_places,Build_Data,BI,average_wage,std_wage);
+        % Usage restoration on recovery: residential buildings (pre-shock
+        % usage 1 or 2) revert to their original type, since every
+        % housing-search pathway (filter_residential_assets.m) requires
+        % usage in {1,2} before a household can even be offered that
+        % asset -- without this, recovered housing stock is returned to
+        % the Assets pool but permanently unreachable (this was the
+        % actual bug behind SA_RESIDENT never recovering after a shock,
+        % even though the recovery countdown completed). Non-residential
+        % buildings (commercial/industrial/public) stay at usage=0
+        % permanently by design -- their workplaces still function via
+        % Work_places (matched by building ID, not gated by Build_Data
+        % usage), they just no longer count toward service-ratio/
+        % SA_SERVICE metrics once destroyed.
+        restore_mask = orig_usage_recovered==1 | orig_usage_recovered==2;
+        if any(restore_mask)
+            [~,locRestore]=ismember(BI(restore_mask),Build_Data(:,1));
+            Build_Data(locRestore,3)=orig_usage_recovered(restore_mask);
+        end
         if displaced_shelter==1 && ~isempty(Shelters)
             [Build_Data, Shelters, Shelter_Assign, Shelter_HH_Track, Shelter_Building_Routines, Building_routine_id, forced_release_hh] = ...
                 release_shelter_capped(Build_Data, Individuals_data, HH_data, Shelters, Shelter_Assign, Shelter_HH_Track,...
@@ -548,11 +723,52 @@ for i=1:steps
     %% earthquake
     % One-time shock (same trigger pattern as the original run_model_eq.m),
     % replacing rocket_attack2's iterative wave loop. Requires a per-SA
-    % damage table at [file,'earthquake_damage.csv'] - see earth_quake.m.
+    % damage table at [file,'TVR\earthquake_damage.csv'] - see earth_quake.m.
+    % BUG FIX: path was missing the TVR\ subfolder prefix every other data
+    % load in this file uses (model parameters.csv, sas_national.xlsx,
+    % real_growth_rates.csv, commuting.xlsx all go through TVR\) -- never
+    % caught before because no run prior to this had shock_step reachable
+    % within its step count, so this line never actually executed.
     if i==shock_step && shock==0
+        % DIAGNOSTIC (one-time): snapshot EVERY household's building
+        % assignment and building-level service ratio right now, before
+        % anything about today changes Build_Data at all -- Build_Data(:,19)
+        % at this exact point still reflects yesterday's (day i-1) ending
+        % state, since building_service_ratio.m only runs once per
+        % iteration, near the end. Compared against the same households'
+        % state right before today's Metric_Track row is computed, this
+        % isolates how much of the immediate post-shock service-ratio jump
+        % comes from the NON-displaced population (whose building didn't
+        % get destroyed) vs. the displaced population (already tested
+        % separately below).
+        diag_allpop_pre_hh_ids = HH_data(:,2);
+        [~, diag_locBuildPre] = ismember(HH_data(:,10), Build_Data(:,1));
+        diag_allpop_pre_building = HH_data(:,10);
+        diag_allpop_pre_svc = Build_Data(diag_locBuildPre, 19);
+        diag_allpop_pre_density = Build_Data(diag_locBuildPre, 26);
+        diag_allpop_pre_group = zeros(size(HH_data,1),1); % 0=non-elderly,1=young-old,2=old-old
+        diag_allpop_pre_group(HH_data(:,5)==3) = 1;
+        diag_allpop_pre_group(HH_data(:,5)==6) = 2;
         shock=1;
-        [destroyed_B_P, destroyed_B] = earth_quake(Build_Data, [file,'earthquake_damage.csv']);
+        [destroyed_B_P, destroyed_B] = earth_quake(Build_Data, [file,'TVR\earthquake_damage.csv']);
         [bad_Assets,Assets,destroyed_B]=shock_A(Assets,destroyed_B);
+        % Usage-blind destruction: earth_quake.m selects damaged buildings
+        % regardless of type, but previously only residential buildings'
+        % usage ever actually zeroed out -- find_empty_buildings.m infers
+        % "empty" from Assets occupancy, and non-residential buildings
+        % have zero Assets rows to begin with (confirmed empirically:
+        % Assets only ever contains rows for the city's ~2963 usage==1
+        % buildings), so destroyed commercial/industrial/public buildings
+        % kept counting as active service providers in
+        % building_service_ratio.m/SA_SERVICE indefinitely. Capture each
+        % destroyed building's pre-shock usage as destroyed_B col(4)
+        % (needed to restore residential buildings correctly on recovery
+        % below), then zero every destroyed building's usage immediately
+        % and uniformly, matching earth_quake.m's own usage-blind
+        % selection.
+        [~,idx_destroyed_build] = ismember(destroyed_B(:,1),Build_Data(:,1));
+        destroyed_B(:,4) = Build_Data(idx_destroyed_build,3);
+        Build_Data(idx_destroyed_build,3) = 0;
         % HH no house
         HH_destroyed=shock_H(HH_data,Assets);
 
@@ -568,6 +784,34 @@ for i=1:steps
 
             n = size(selected_HH,1);
 
+            % Persisted (not reset next step, unlike HH_destroyed/
+            % destroyed_ids above) so the short-term snapshot block below
+            % can still find this exact household list weeks later.
+            shock_displaced_hh_ids = destroyed_ids;
+
+            % Staggered relocation eligibility (toggle: use_staggered_
+            % relocation): assign each newly-displaced household to the
+            % 'slow' or 'fast' mover population once, here, then let the
+            % per-step Bernoulli draw below (near moving_HH construction)
+            % decide when it actually enters the housing search. See the
+            % relocation_w_slow/p_slow/p_fast definitions above for the
+            % calibration source. When off, HH_destroyed feeds moving_HH
+            % directly instead (original same-day behavior).
+            if use_staggered_relocation==1
+                is_slow_draw = rand(numel(destroyed_ids),1) < relocation_w_slow;
+                pending_relocation = [pending_relocation; destroyed_ids, double(is_slow_draw)];
+            end
+
+            % DIAGNOSTIC (one-time, shock day only): does same-day housing
+            % search already relocate a meaningful share of displaced
+            % households before today's Metric_Track row is computed?
+            % Captures each displaced household's building assignment
+            % right now (still pointing at their destroyed home, before
+            % any of today's moving_HH/search logic runs) so it can be
+            % compared against their assignment right before the metric
+            % block below, at the end of the same day's processing.
+            diag_pre_search_hh_ids = selected_HH(:,2);
+            diag_pre_search_building = selected_HH(:,10);
         end
         % lost jobs (work places id - to find workers) and delete working places
         [Work_places,lost_jobs]=shock_W(Work_places,destroyed_B);
@@ -582,6 +826,24 @@ for i=1:steps
         end
     end
 
+    % Short-term (default 90 days = "up to 3 months") post-shock snapshot
+    % of where the originally shock-displaced households (persisted
+    % above as shock_displaced_hh_ids) ended up -- HH_MOVE_TRACK col 8.
+    % Runs exactly once, the day the snapshot window closes. Households
+    % still present in the city at that moment get their current SA;
+    % households no longer in HH_data (already left) get -1 rather than
+    % being left NaN, so "NaN" unambiguously means "not part of the
+    % shock-displaced cohort" everywhere else in this column.
+    if ~exist('shock_snapshot_days','var'); shock_snapshot_days=90; end
+    if exist('shock_displaced_hh_ids','var') && ~isempty(shock_displaced_hh_ids) && i==(shock_step+shock_snapshot_days)
+        [~,locTrack] = ismember(shock_displaced_hh_ids,HH_MOVE_TRACK(:,1));
+        validTrack = locTrack>0;
+        [stillHere,locHH] = ismember(shock_displaced_hh_ids(validTrack),HH_data(:,2));
+        snapSA = -1*ones(sum(validTrack),1); % default: already left the city
+        snapSA(stillHere) = HH_data(locHH(stillHere),1);
+        HH_MOVE_TRACK(locTrack(validTrack),8) = snapSA;
+    end
+
     [HH_data,HH_subsidy_tracker]=HH_subsidy_pct(HH_data,HH_destroyed,HH_subsidy_tracker,subsidy_residents,subsidy_pct,w_subsidy_eld,subsidy_duration,i);
 
     % HH still waiting in shelter after this step's releases/new
@@ -592,13 +854,47 @@ for i=1:steps
     % below if this attempt fails - the duration cap means relocate-or-leave.
     still_sheltered_hh = Shelter_HH_Track(:,1);
 
-    moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,2,eld_movef); % K=2, probability of moving within SA
-    moving_HH=[moving_HH;HH_destroyed;still_sheltered_hh;forced_release_hh];
+    % Staggered relocation eligibility (toggle: use_staggered_relocation):
+    % each still-pending displaced household draws against its assigned
+    % fast/slow daily probability; only those that pass enter today's
+    % housing search (moving_HH). When off, HH_destroyed feeds moving_HH
+    % directly instead (original same-day behavior, unchanged from before
+    % this session's change).
+    newly_eligible_hh = [];
+    if use_staggered_relocation==1
+        if ~isempty(pending_relocation)
+            % BUG FIX: a household can sit in pending_relocation for many
+            % days (slow movers average ~70 days). In the meantime it can
+            % independently get picked up by the ordinary who_is_moving
+            % roll, attempt (and keep failing) a search from its still-
+            % destroyed home, and get deleted via the existing
+            % resSearchLen/did_not_find_house eviction path -- all while
+            % pending_relocation still holds its ID. If its Bernoulli draw
+            % then "succeeds" for a household that no longer exists in
+            % HH_data, find_new_house_same_stat crashes trying to look up
+            % a non-scalar/empty SA for it. Prune stale entries first.
+            still_exists_pending = ismember(pending_relocation(:,1), HH_data(:,2));
+            pending_relocation = pending_relocation(still_exists_pending,:);
+        end
+        if ~isempty(pending_relocation)
+            p_draw = zeros(size(pending_relocation,1),1);
+            p_draw(pending_relocation(:,2)==1) = relocation_p_slow;
+            p_draw(pending_relocation(:,2)==0) = relocation_p_fast;
+            eligible_now = rand(size(pending_relocation,1),1) < p_draw;
+            newly_eligible_hh = pending_relocation(eligible_now,1);
+            pending_relocation(eligible_now,:) = [];
+        end
+    else
+        newly_eligible_hh = HH_destroyed;
+    end
+
+    moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,2,eld_movef,eld_movef_old); % K=2, probability of moving within SA
+    moving_HH=[moving_HH;newly_eligible_hh;still_sheltered_hh;forced_release_hh];
     moving_HH=unique(moving_HH);
     if isempty(moving_HH)==0 % assign new asset for agent
         [HH_ID_left,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data,Asset_Avail]...
             =find_new_house_same_stat(HH_ID_left,pd,wservice,wservice_old,service_mean,service_std,stat_data,HH_data,Individuals_data, ...
-            Build_Data,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,Asset_Avail,svc_filter);
+            Build_Data,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,Asset_Avail,svc_filter,elderly_search_mode);
 
         if ~isempty(HH_change)  
 
@@ -621,12 +917,12 @@ for i=1:steps
 
     end
 
-    moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,3,eld_movef); % K=3, probability of moving within the city
+    moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,3,eld_movef,eld_movef_old); % K=3, probability of moving within the city
 
     if isempty(moving_HH)==0
         [HH_ID_left,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data,Asset_Avail]= ...
             find_new_house_yeshuv(HH_ID_left,pd,wservice,wservice_old,service_mean,service_std,stat_data,HH_data,Individuals_data,Build_Data ...
-            ,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,Asset_Avail);
+            ,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,Asset_Avail,svc_filter,elderly_search_mode);
         if ~isempty(HH_change)
 
             moved_hh = unique(HH_change(:,1));
@@ -708,9 +1004,15 @@ for i=1:steps
     % workplaces, so also raising new_jobs compounds workplace loss)
     % additionally brings workplace loss below the original baseline.
     if ~exist('new_jobs_rank_thresh','var'); new_jobs_rank_thresh=20; end       % rank diff above this -> add workplaces to building
-    if ~exist('lost_jobs_rank_thresh','var'); lost_jobs_rank_thresh=-60; end    % rank diff below this -> delete building's workplaces entirely
-    if ~exist('lu_change_rank_lower','var'); lu_change_rank_lower=40; end       % Change_LU band lower bound
-    if ~exist('lu_change_rank_upper','var'); lu_change_rank_upper=60; end       % Change_LU band upper bound
+    % lost_jobs_rank_thresh/lu_change_rank_lower/lu_change_rank_upper
+    % locked in as a validated combo (band widened 60-80 -> 45-85) -- see
+    % the matching comment in run_earthquake_setting.m for the 10-
+    % replicate CI finding that justified this (SA_JOBS reaches genuine
+    % saturation, letting mean wage actually plateau instead of drifting
+    % indefinitely, at the cost of a small but real population shortfall).
+    if ~exist('lost_jobs_rank_thresh','var'); lost_jobs_rank_thresh=-100; end   % rank diff below this -> delete building's workplaces entirely
+    if ~exist('lu_change_rank_lower','var'); lu_change_rank_lower=45; end       % Change_LU band lower bound
+    if ~exist('lu_change_rank_upper','var'); lu_change_rank_upper=85; end       % Change_LU band upper bound
 
     if i>lu_warmup && mod(i,lu_update_every)==0
         %% mean visit per building
@@ -763,7 +1065,7 @@ for i=1:steps
         % building converts) -- this one feeds the potential-salary
         % ranking that decides WHETHER a building converts in the first
         % place (Change_LU below), so it's tested independently.
-        if ~exist('lu_potential_jobs_per_meter','var'); lu_potential_jobs_per_meter=JobsPerM_comm_loaded; end % dynamically loaded, city-correct
+        if ~exist('lu_potential_jobs_per_meter','var'); lu_potential_jobs_per_meter=0.017865406; end % 2.0x Tiberias JobsPerM_comm, validated combo
         workers=ceil((B(:,7).*ceil(B(:,11)).*lu_potential_jobs_per_meter)); % model parameter jobs per comm
         pot_sal_for_B=[B(:,1),workers.*average_wage]; % building ID and total wage
         
@@ -882,6 +1184,19 @@ for i=1:steps
         Individuals_data(ind_lost_job,15) = 0; % 'building_work_place' = 0
         Individuals_data(ind_lost_job,17) = 0; % 'work_place_id' = 0
         Individuals_data(ind_lost_job,14) = 0; % 'income' = 0
+        % BUG FIX: col(18) ('random preference', the job-acceptance
+        % threshold find_job_1.m tests candidates against) was only ever
+        % drawn once at day-0 init for the original unemployed cohort --
+        % anyone entering job-search status afterward (here, or at the
+        % "add people to working market" site below) kept whatever
+        % col(18) they had, which for anyone never in that original
+        % cohort is the array's un-initialized default of exactly 0
+        % (zero pickiness -- accepts the very first candidate seen every
+        % time). Confirmed via direct inspection: 5 of 8 currently-
+        % searching individuals in a 400-day test run had col(18)==0
+        % exactly. Fix: draw a fresh threshold on every transition into
+        % job-search status, same as the original day-0 initialization.
+        Individuals_data(ind_lost_job,18) = rand(sum(ind_lost_job),1);
 
         %% commercial potantial change LU
         if  comm_policy==0
@@ -962,7 +1277,7 @@ for i=1:steps
                 [HH_ID_left,HH_data,Assets,HH_change,LU,...
                     new_A,new_B,Build_Data,Asset_Avail]...
                     =find_new_house_same_stat(HH_ID_left,pd,wservice,wservice_old,service_mean,service_std,stat_data,HH_data,Individuals_data,Build_Data,...
-                    Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,Asset_Avail,svc_filter);
+                    Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,Asset_Avail,svc_filter,elderly_search_mode);
 
                 if ~isempty(HH_change)
 
@@ -1009,7 +1324,7 @@ for i=1:steps
             % NOTE: the inline comment on the next line says "*0.014" but
             % the value actually used is 0.00779 -- roughly half. Made
             % configurable to test both.
-            if ~exist('lu_jobs_per_meter','var'); lu_jobs_per_meter=JobsPerM_comm_loaded; end % dynamically loaded, city-correct
+            if ~exist('lu_jobs_per_meter','var'); lu_jobs_per_meter=0.040197164; end % 4.5x Tiberias JobsPerM_comm, validated combo
             JOBS_per_meter=lu_jobs_per_meter;
             workers=(New_Comm_B(:,7).*ceil(New_Comm_B(:,11)).*JOBS_per_meter); % Area*roundup(floor)*jobs-per-meter ; have col(25) already claculated
             workers(workers<1)=1;
@@ -1067,16 +1382,17 @@ for i=1:steps
     % {0.6,0.8}, lamda in {0.25,0.45,0.95}, delta in {0.75,0.8,0.95}.
     if ~exist('wage_alfa','var'); wage_alfa=0.3; end
     if ~exist('wage_beta','var'); wage_beta=0.8; end
-    % wage_lamda default changed from 0.95 -> 0.55: a late-period OAT
-    % sweep (land-use activity frozen, day 360+) found lamda controls the
-    % sign of the persistent post-freeze wage drift via the 1/lamda
-    % exponent on income_ratio -- 0.95 gave a small but permanent decline
-    % (-0.49% over days 360-550), 0.55 was the closest-to-flat value
-    % actually tested (+0.24%). alfa/beta/delta showed no comparably
-    % clean lever (alfa provably can't matter once land-use freezes,
-    % since floor_ratio's base is exactly 1 then; beta/delta showed real
-    % but non-monotonic sensitivity, not a usable dial).
-    if ~exist('wage_lamda','var'); wage_lamda=0.55; end
+    % wage_lamda reverted to 0.95 (original default) per user request.
+    % Note from prior tuning session: a late-period OAT sweep (land-use
+    % activity frozen, day 360+) found lamda controls the sign of the
+    % persistent post-freeze wage drift via the 1/lamda exponent on
+    % income_ratio -- 0.95 gives a small but permanent decline (-0.49%
+    % over days 360-550), 0.55 was the closest-to-flat value actually
+    % tested (+0.24%). alfa/beta/delta showed no comparably clean lever
+    % (alfa provably can't matter once land-use freezes, since
+    % floor_ratio's base is exactly 1 then; beta/delta showed real but
+    % non-monotonic sensitivity, not a usable dial).
+    if ~exist('wage_lamda','var'); wage_lamda=0.95; end
     if ~exist('wage_delta','var'); wage_delta=0.75; end
     alfa=wage_alfa;
     beta=wage_beta;
@@ -1136,8 +1452,12 @@ for i=1:steps
         % (run_model_eq.m:472), so it's an original-model bug, not
         % something introduced by this session's tuning.
         Individuals_data(P,12)=1; % 'working status'=1
+        % Same col(18) fix as the land-use job-loss site above -- draw a
+        % fresh acceptance threshold instead of leaving the stale/
+        % un-initialized value (0 for anyone never previously searching).
+        Individuals_data(P,18) = rand(length(P),1);
     end
-    
+
     %% imiggratoin inside ; update agents list and workplaces
     [Assets,HH_data,Individuals_data,Work_places,routine,new_A, HH_MOVE_TRACK]=...
     migration_19(Assets,intra_SA,HH_data,Individuals_data,Work_places,new_A, HH_MOVE_TRACK, Build_Data, real_growth_rate);
@@ -1180,6 +1500,8 @@ for i=1:steps
     %% sas move:
     % calculate building service ratio
     [Build_Data]=building_service_ratio(Build_Data,Build_Data_p,Build_Distance_matrix_400);
+    % calculate building service density (land-area, reporting-only)
+    [Build_Data]=building_service_density(Build_Data,Build_Data_p,Build_Distance_matrix_400,400);
     m = nanmean(Assets(:,12)); % mean assets price
     s = nanstd(Assets(:,12)); % stdev assets price
     f = Assets(:,12) > (m + 2*s); % price > m+2s
@@ -1294,6 +1616,15 @@ for i=1:steps
                 stat_data(stat_data(:,1)==g_sa(g),5)=com_b/res_b;
             end
 
+            % update dynamic land-area service density col(8) -- reporting-
+            % only, see the init comment above. Land area (col7) is fixed;
+            % only the commercial floorspace numerator moves.
+            la_g = stat_data(stat_data(:,1)==g_sa(g),7);
+            if ~isempty(la_g) && ~isnan(la_g) && la_g>0
+                comm_floor_g = sum(b_data(b_data(:,3)>1 & b_data(:,3)<4, 25));
+                stat_data(stat_data(:,1)==g_sa(g),8) = comm_floor_g/la_g;
+            end
+
             [locA,~]=ismember(Assets(:,2), b_data(:,1)); % match building ID
             Assets(locA,5) = Assets(locA,5).*(1+ SA_LOGC(g,i+1)); % ppm*(1+log(total ratio))
            
@@ -1345,6 +1676,81 @@ for i=1:steps
         Work_places(ismember(Work_places(:,1),lost_jobs_B_ID(:,1)),:) =[]; % remove lost jobs check
     end
     
+    % DIAGNOSTIC (one-time, shock day only): compare the same displaced
+    % households' building-level service ratio right after destruction
+    % (before today's search) vs. right now (after all of today's
+    % moving_HH/search logic has run), to test whether same-day
+    % reassignment into surviving buildings -- not shelter, not the
+    % destruction math itself -- explains the immediate post-shock jump
+    % in BuildingServiceRatio_*. Both shelter and pure-destruction-math
+    % explanations were already ruled out via isolated tests.
+    if i==shock_step && exist('diag_pre_search_hh_ids','var')
+        [foundNow, locNow] = ismember(diag_pre_search_hh_ids, HH_data(:,2));
+        diag_post_search_building = nan(size(diag_pre_search_hh_ids));
+        diag_post_search_building(foundNow) = HH_data(locNow(foundNow), 10);
+        [~, locBefore] = ismember(diag_pre_search_building, Build_Data(:,1));
+        [~, locAfter] = ismember(diag_post_search_building(foundNow), Build_Data(:,1));
+        svc_before = Build_Data(locBefore, 19);
+        svc_after = nan(size(diag_pre_search_hh_ids));
+        svc_after(foundNow) = Build_Data(locAfter, 19);
+        moved_same_day = foundNow & (diag_post_search_building ~= diag_pre_search_building);
+        [~, locElderlyDiag] = ismember(diag_pre_search_hh_ids, HH_data(:,2));
+        fprintf('\n=== DAY %d SAME-DAY REASSIGNMENT DIAGNOSTIC ===\n', i);
+        fprintf('Displaced households: %d | still present today: %d | moved to a different building same-day: %d\n', ...
+            numel(diag_pre_search_hh_ids), sum(foundNow), sum(moved_same_day));
+        fprintf('Mean building service ratio -- destroyed home (before search): %.4f\n', mean(svc_before, 'omitnan'));
+        fprintf('Mean building service ratio -- current building (after today''s search): %.4f\n', mean(svc_after, 'omitnan'));
+        fprintf('Mean building service ratio -- MOVED households only, destroyed home: %.4f | new building: %.4f\n', ...
+            mean(svc_before(moved_same_day), 'omitnan'), mean(svc_after(moved_same_day), 'omitnan'));
+        fprintf('=== END DIAGNOSTIC ===\n\n');
+        diag_snapshot_pre = svc_before;
+        diag_snapshot_post = svc_after;
+        diag_snapshot_moved = moved_same_day;
+    end
+
+    % DIAGNOSTIC (one-time, shock day only): full-population decomposition.
+    % The displaced-only diagnostic above already showed the displaced
+    % subset's own ratio goes DOWN, not up -- so whatever is driving the
+    % aggregate increase must be in the non-displaced population (~93% of
+    % the city). Compares each household's building-level service ratio
+    % from the pre-shock snapshot (captured above, before anything today
+    % changed) against right now, split by displaced/non-displaced and by
+    % whether their building assignment itself changed today.
+    if i==shock_step && exist('diag_allpop_pre_hh_ids','var')
+        [foundNowAll, locNowAll] = ismember(diag_allpop_pre_hh_ids, HH_data(:,2));
+        allpop_post_building = nan(size(diag_allpop_pre_hh_ids));
+        allpop_post_building(foundNowAll) = HH_data(locNowAll(foundNowAll), 10);
+        [~, locBuildPost] = ismember(allpop_post_building(foundNowAll), Build_Data(:,1));
+        allpop_post_svc = nan(size(diag_allpop_pre_hh_ids));
+        allpop_post_svc(foundNowAll) = Build_Data(locBuildPost, 19);
+        allpop_post_density = nan(size(diag_allpop_pre_hh_ids));
+        allpop_post_density(foundNowAll) = Build_Data(locBuildPost, 26);
+
+        is_displaced = ismember(diag_allpop_pre_hh_ids, shock_displaced_hh_ids);
+        nonDisp = foundNowAll & ~is_displaced;
+        bldg_unchanged = nonDisp & (allpop_post_building == diag_allpop_pre_building);
+        bldg_changed = nonDisp & (allpop_post_building ~= diag_allpop_pre_building);
+
+        fprintf('\n=== DAY %d FULL-POPULATION DECOMPOSITION ===\n', i);
+        fprintf('Non-displaced households: %d\n', sum(nonDisp));
+        fprintf('  Same building today as yesterday (n=%d): mean svc yesterday=%.4f -> today=%.4f (%.2f%% change)\n', ...
+            sum(bldg_unchanged), mean(diag_allpop_pre_svc(bldg_unchanged),'omitnan'), mean(allpop_post_svc(bldg_unchanged),'omitnan'), ...
+            100*(mean(allpop_post_svc(bldg_unchanged),'omitnan')-mean(diag_allpop_pre_svc(bldg_unchanged),'omitnan'))/mean(diag_allpop_pre_svc(bldg_unchanged),'omitnan'));
+        fprintf('  Building assignment CHANGED today (n=%d, ordinary non-shock moves): mean svc yesterday''s building=%.4f -> today''s new building=%.4f\n', ...
+            sum(bldg_changed), mean(diag_allpop_pre_svc(bldg_changed),'omitnan'), mean(allpop_post_svc(bldg_changed),'omitnan'));
+        fprintf('  ALL non-displaced combined: mean svc yesterday=%.4f -> today=%.4f (%.2f%% change)\n', ...
+            mean(diag_allpop_pre_svc(nonDisp),'omitnan'), mean(allpop_post_svc(nonDisp),'omitnan'), ...
+            100*(mean(allpop_post_svc(nonDisp),'omitnan')-mean(diag_allpop_pre_svc(nonDisp),'omitnan'))/mean(diag_allpop_pre_svc(nonDisp),'omitnan'));
+        fprintf('Displaced households (n=%d): mean svc yesterday=%.4f -> today=%.4f\n', ...
+            sum(is_displaced & foundNowAll), mean(diag_allpop_pre_svc(is_displaced & foundNowAll),'omitnan'), mean(allpop_post_svc(is_displaced & foundNowAll),'omitnan'));
+        fprintf('=== END FULL-POPULATION DIAGNOSTIC ===\n\n');
+
+        diag_allpop_post_svc = allpop_post_svc;
+        diag_allpop_post_density = allpop_post_density;
+        diag_allpop_post_building = allpop_post_building;
+        diag_allpop_is_displaced = is_displaced;
+    end
+
     %below, calculations for citywide metrics in metric_track
 
     elderly    = HH_data(:,5)>=2;
@@ -1360,6 +1766,12 @@ for i=1:steps
     [~,locBuild] = ismember(HH_data(:,10), Build_Data(:,1));
     HH_build_svc = Build_Data(locBuild, 19);
 
+    % --- SA/building land-area service density per HH (stat_data col8,
+    % Build_Data col26) -- reporting-only, see building_service_density.m
+    % and the stat_data col7/8 init comment for full rationale ---
+    HH_service_density = stat_data(locStat, 8);
+    HH_build_density = Build_Data(locBuild, 26);
+
     % --- sheltered HH: service metrics reflect the SHELTER's location,
     % not their (possibly still-destroyed) original home ---
     if ~isempty(Shelter_HH_Track)
@@ -1371,6 +1783,8 @@ for i=1:steps
             [~, locStatShelter] = ismember(shelter_sa_ids, stat_data(:,1));
             HH_service(sheltered_mask)   = stat_data(locStatShelter, 5);
             HH_build_svc(sheltered_mask) = Build_Data(locBuildShelter, 19);
+            HH_service_density(sheltered_mask) = stat_data(locStatShelter, 8);
+            HH_build_density(sheltered_mask) = Build_Data(locBuildShelter, 26);
         end
     end
 
@@ -1387,6 +1801,14 @@ for i=1:steps
     Metric_Track(i,5)  = mean(HH_build_svc(nonelderly), 'omitnan');
     Metric_Track(i,28) = mean(HH_build_svc(young_old),  'omitnan');
     Metric_Track(i,29) = mean(HH_build_svc(old_old),    'omitnan');
+
+    % SA/building land-area service density by subgroup (reporting-only)
+    Metric_Track(i,42) = mean(HH_service_density(nonelderly), 'omitnan');
+    Metric_Track(i,43) = mean(HH_service_density(young_old),  'omitnan');
+    Metric_Track(i,44) = mean(HH_service_density(old_old),    'omitnan');
+    Metric_Track(i,45) = mean(HH_build_density(nonelderly),   'omitnan');
+    Metric_Track(i,46) = mean(HH_build_density(young_old),    'omitnan');
+    Metric_Track(i,47) = mean(HH_build_density(old_old),      'omitnan');
 
     % Population counts
     Metric_Track(i,6)  = sum(elderly);
@@ -1632,11 +2054,16 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             SA_OUTCOME SA_POP SA_PRICE SA_SERVICE SA_WAGE SA_WP SA_RESIDENT SA_HOUSE SA_COMERCIAL...
             SA_IDLE SA_LOCAL SA_WORKING SA_JOBS SA_FIRST SA_SECOND SA_THIRD SA_FOURTH...
             SA_FIFTH SA_SIXTH SA_SEVENTH SA_EIGHTH SA_NINTH SA_TENTH SA_AREA HH_MOVE_TRACK HH_MOVE_TRACK_P Metric_Track Metric_Track_P SA_Relocation RelocationSummary SA_Demographics Metric_Change...
-            wservice wservice_old eld_movef svc_filter steps sa_update_every resSearchLen...
+            wservice wservice_old eld_movef eld_movef_old svc_filter elderly_search_mode steps sa_update_every resSearchLen...
+            shock_step shock_snapshot_days...
+            diag_snapshot_pre diag_snapshot_post diag_snapshot_moved diag_pre_search_hh_ids...
+            diag_allpop_pre_hh_ids diag_allpop_pre_building diag_allpop_pre_svc diag_allpop_post_svc diag_allpop_post_building diag_allpop_is_displaced...
+            diag_allpop_pre_density diag_allpop_post_density diag_allpop_pre_group...
             new_jobs_rank_thresh lost_jobs_rank_thresh lu_change_rank_lower lu_change_rank_upper lu_jobs_per_meter lu_potential_jobs_per_meter init_dataset_name commute_outside_rate...
             wage_alfa wage_beta wage_lamda wage_delta...
             subsidy_residents subsidy_pct w_subsidy_eld subsidy_duration HH_subsidy_tracker...
-            displaced_shelter agents_per_sqm max_shelter_duration Shelters Shelter_Assign Shelter_HH_Track SA_Shelter_Rank
+            displaced_shelter agents_per_sqm max_shelter_duration Shelters Shelter_Assign Shelter_HH_Track SA_Shelter_Rank...
+            pending_relocation relocation_w_slow relocation_p_slow relocation_p_fast use_staggered_relocation
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',num2str(kk),' ',run_uid]);
 save(full_file_name);
 end

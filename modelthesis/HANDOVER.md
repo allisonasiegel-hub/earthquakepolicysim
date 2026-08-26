@@ -7,6 +7,41 @@ service-weight differentiation") through the current, **partially
 uncommitted** working tree. Read this before touching any of the files
 below.
 
+## QUICK REFERENCE (added in a later session — read this first if you just
+## want current status, not the full history below)
+
+- **Finalized methodology: plain mode 2, no eld_movef.**
+  `elderly_search_mode=2` (SA-level hard filter + weighted SA pick for
+  out-of-SA moves, old-old weighted more strongly than young-old),
+  `svc_filter=1` (mode 2's within-SA hard building-level floor). These are
+  now the DEFAULTS in both `run_model_earthquake.m` and
+  `run_earthquake_setting.m` — search for "FINALIZED METHODOLOGY" comments
+  in either file for the full rationale. Canonical run script:
+  `run_final_methodology.m`. Modes 1, 3, 4, 5, 6 and an eld_movef
+  (movement-probability reduction) variant were all tested and rejected in
+  favor of mode 2 — see `find_new_house_sa_score.m`'s header comment for
+  every mode's mechanics.
+- **Standard results output**: `python analysis_scripts/standard_report.py
+  <config>` (e.g. `mode2`, `mode6`, `baseline`) produces a results table
+  (SA/building service level, SA/city success rate, normalized assets —
+  avg±std per population group, with significance asterisks) plus
+  Metric_Track trend plots and all 24 SA_* macro-economic trend plots
+  (overview grid PNG + one-page-per-variable PDF + individual PNGs), all
+  in one command. Run it from `modelthesis/`. Self-contained, no other
+  context needed.
+- **Shock-vs-baseline delta output**: `python analysis_scripts/
+  shock_delta_report.py <scenario_pattern> [<scenario_pattern2> ...]`
+  compares one or more shock scenarios (e.g. `shock_mode2`, and later an
+  intervention variant) against a single fixed baseline (default:
+  `760day_mode2`, i.e. the finalized methodology with no shock — override
+  with `--baseline`). NOT a mode-vs-mode comparison — the methodology
+  (mode 2) is fixed; what varies is the shock scenario. Reports the same 6
+  metrics x 3 population groups as the table above, as deltas, with
+  significance once both sides have >=2 replicates.
+- Confirmed replicate counts as of this note: baseline n=7, mode1 n=4,
+  mode2 n=10, mode3 n=10, mode4 n=4, mode5 n=10, mode6 n=4 (plus several
+  eld_movef variants at n=4-8, ultimately not used in the final choice).
+
 ## 0. Current repo state — READ FIRST
 
 - Committed up through `9b078e7` ("Fix labor-market/metric bugs and
