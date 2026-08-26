@@ -186,7 +186,7 @@ def mode_sweep(args):
 def mode_compare(args):
     import abm_analysis as aa
 
-    cfg = aa.Config(mat_dir='', scenarios={s[0]: s[0] for s in args.scenario})
+    cfg = aa.Config(mat_dir='', scenarios={s[0]: s[0] for s in args.scenario}, colors=dict(args.color))
     runs_by_var = {v: {} for v in cfg.variables}
 
     for label, path in args.scenario:
@@ -199,6 +199,15 @@ def mode_compare(args):
                 df = df.iloc[:, args.day_start:args.day_end]
             else:
                 df = df.iloc[:, args.day_start:]
+            # SA_* columns are only populated every sa_update_every days --
+            # unpopulated day-columns are literally zero-filled, not NaN.
+            # Same heuristic plot_baseline_macro_all.py uses. Without this,
+            # sa_update_every>1 runs (e.g. the model's monthly default of
+            # 30) plot a sawtooth crashing to 0 between each real update
+            # instead of a smooth line through only the populated days.
+            populated = (df != 0).any(axis=0)
+            if populated.any():
+                df = df.loc[:, populated]
             series = df.mean(axis=0) if aa.is_mean_variable(v, cfg.variable_titles) else df.sum(axis=0)
             runs_by_var[v].setdefault(label, []).append(series)
 
@@ -417,6 +426,11 @@ def main():
     p1b.add_argument('--day-start', type=int, default=0)
     p1b.add_argument('--day-end', type=int, default=None)
     p1b.add_argument('--out', default='plots_compare')
+    p1b.add_argument('--color', nargs=2, action='append', default=[], metavar=('NAME', 'COLOR'),
+                      help='repeatable, e.g. --color a5 tab:blue --color a15 tab:green --color a30 tab:red. '
+                           'Without this, scenario_style() colors anything with "base" in its name tab:blue '
+                           'and everything else tab:green -- indistinguishable once you have 3+ non-baseline '
+                           'scenarios in one plot.')
 
     p2 = sub.add_parser('sweep', help='sensitivity sweep plots')
     p2.add_argument('--csv', default='sensitivity_sweep_results_summary.csv')
