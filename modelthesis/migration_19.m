@@ -94,7 +94,9 @@ for i=1:size(sas_data,1)
                 new_HH(5),...       % Elderly count
                 NaN,...             % Final SA
                 0,...               % Displaced
-                0];                 % Left city
+                0,...               % Left city
+                new_HH(12),...      % OldOld_Count
+                NaN];               % SA_at_3mo_snapshot
                 new_individuals=individuals(individuals(:,3)==old_id,:); % agents within HH
                 new_individuals(:,15:17)=0; % 'building_work_place' ; 'stat_work_place' ; 'work_place_id'
                 new_individuals(:,3)=HH_id; % update HH
@@ -114,9 +116,18 @@ for i=1:size(sas_data,1)
                 f=find(Work_places(:,7)==0);
                 F=find(new_individuals(:,12)==2);
                 new_individuals(F(1:length(f)),15:17)=Work_places(f,[1,2,6]);
-                new_individuals(F(length(f)+1:end),12)=1;                   
+                new_individuals(F(length(f)+1:end),12)=1;
+                % col(18) fix (see run_model_earthquake.m for the full
+                % explanation): new_individuals is copied from an
+                % existing-household template whose originally-employed
+                % rows never had a real col(18) draw (only day-0
+                % unemployed did) -- draw one now that they're entering
+                % job-search status, instead of inheriting a stale 0.
+                new_individuals(F(length(f)+1:end),18) = rand(length(F)-length(f),1);
                 else
-                    new_individuals(new_individuals(:,12)==2,12)=1;                    
+                    was2 = new_individuals(:,12)==2;
+                    new_individuals(was2,12)=1;
+                    new_individuals(was2,18) = rand(sum(was2),1);
                 end
                 routine=[routine;new_individuals(:,1)]; % add agents id 
                 Individuals_data=[Individuals_data;new_individuals]; % update Agents list
