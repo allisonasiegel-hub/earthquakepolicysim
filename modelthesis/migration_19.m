@@ -31,8 +31,21 @@ for i=1:size(sas_data,1)
     end
     daily_rate=max(0,annual_rate)/365;
     expected_new=daily_rate*current_hh_count;
+    % BUG FIX: round(normrnd(expected_new,expected_new/3)) essentially
+    % never produces a nonzero count when expected_new is small (which is
+    % most of the time here -- real per-SA rates give expected_new mostly
+    % in the 0.01-0.25/day range). round() needs the draw to cross 0.5,
+    % and a Normal(mean, mean/3) distribution puts that ~3 sigma away for
+    % mean=0.25 and much further for smaller means -- confirmed by a
+    % diagnostic trace showing families_precap==0 for every SA on every
+    % day of a 760-day run, i.e. zero migration arrivals city-wide the
+    % entire run despite real_growth_rate being correctly positive for
+    % most SAs. A Poisson draw is the standard, correct way to convert a
+    % small expected rate into a random discrete count -- e.g.
+    % Poisson(0.1) is ~90% chance of 0, ~9% chance of 1, ~0.5% chance of
+    % 2, instead of practically always 0.
     if expected_new>0
-        families=round(normrnd(expected_new,expected_new/3));
+        families=poissrnd(expected_new);
     else
         families=0;
     end

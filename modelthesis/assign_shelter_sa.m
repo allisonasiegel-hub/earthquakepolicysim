@@ -62,7 +62,18 @@ function [Build_Data, Shelters, Shelter_Assign, Shelter_HH_Track, Shelter_Buildi
                 continue
             end
             capacity = floor(agents_per_sqm * Build_Data(row,7) * Build_Data(row,11));
-            free_capacity = capacity - sum(Shelter_Assign(:,2)==b_id);
+            % BUG FIX: Shelter_Assign starts as [] (0x0) before the first
+            % shelter placement -- Shelter_Assign(:,2) on an empty matrix
+            % throws "index exceeds array bounds" (0 columns), so the
+            % very first call after any shock crashed immediately. Never
+            % caught before since no run prior to this had a reachable
+            % shock_step.
+            if isempty(Shelter_Assign)
+                n_in_building = 0;
+            else
+                n_in_building = sum(Shelter_Assign(:,2)==b_id);
+            end
+            free_capacity = capacity - n_in_building;
             if free_capacity >= n_needed
                 [Build_Data, Shelters, Shelter_Building_Routines, Building_routine_id] = ...
                     mark_as_shelter_if_new(Build_Data, Shelters, Shelter_Building_Routines, Building_routine_id, b_id, i);
@@ -84,7 +95,12 @@ function [Build_Data, Shelters, Shelter_Assign, Shelter_HH_Track, Shelter_Buildi
                     continue
                 end
                 capacity = floor(agents_per_sqm * Build_Data(row,7) * Build_Data(row,11));
-                free_capacity = capacity - sum(Shelter_Assign(:,2)==b_id);
+                if isempty(Shelter_Assign)
+                    n_in_building = 0;
+                else
+                    n_in_building = sum(Shelter_Assign(:,2)==b_id);
+                end
+                free_capacity = capacity - n_in_building;
                 if free_capacity > best_free
                     best_free = free_capacity;
                     best_r = r;

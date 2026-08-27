@@ -1,8 +1,16 @@
-function moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,K,eld_movef)
+function moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,K,eld_movef,eld_movef_old)
+% eld_movef: movement-probability multiplier for young-old (65-69,
+% HH_data col5==3). eld_movef_old (optional, defaults to eld_movef if
+% not given -- same pattern as wservice/wservice_old): multiplier
+% specifically for old-old (70+, col5==6), applied instead of eld_movef
+% for that subgroup so the two elderly groups can have different
+% relocation rates.
+    if nargin<7 || isempty(eld_movef_old); eld_movef_old=eld_movef; end
     SH=size(HH_data,1);
     R=datasample(random_number,SH); % random number ; 4 times the size of HH
     MM=zeros(SH,1); % zero vector size as HH matrix
-    elderly = HH_data(:,5)>=2;
+    young_old = HH_data(:,5)==3;
+    old_old = HH_data(:,5)==6;
 
 
     for u=1:length(unique_stat) 
@@ -23,8 +31,8 @@ function moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,K,el
 
       move_prob = intra_SA_data * ones(SH,1);
 
-      move_prob(elderly) = ...
-        move_prob(elderly) * eld_movef;
+      move_prob(young_old) = move_prob(young_old) * eld_movef;
+      move_prob(old_old) = move_prob(old_old) * eld_movef_old;
 
       M = HH_data(:,1)==unique_stat(u) & R<move_prob;
 
