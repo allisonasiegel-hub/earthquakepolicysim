@@ -1,16 +1,18 @@
 function moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,K,eld_movef,eld_movef_old)
-% eld_movef: movement-probability multiplier for young-old (65-69,
-% HH_data col5==3). eld_movef_old (optional, defaults to eld_movef if
-% not given -- same pattern as wservice/wservice_old): multiplier
-% specifically for old-old (70+, col5==6), applied instead of eld_movef
-% for that subgroup so the two elderly groups can have different
-% relocation rates.
+% eld_movef: movement-probability multiplier for young-old (65-69).
+% eld_movef_old (optional, defaults to eld_movef if not given -- same
+% pattern as wservice/wservice_old): multiplier specifically for
+% old-old (70+), applied instead of eld_movef for that subgroup so the
+% two elderly groups can have different relocation rates.
+% Age groups come from hh_age_group.m (0/1/2) -- do NOT read them off
+% HH_data col5, which counts elderly members rather than their age.
     if nargin<7 || isempty(eld_movef_old); eld_movef_old=eld_movef; end
     SH=size(HH_data,1);
     R=datasample(random_number,SH); % random number ; 4 times the size of HH
     MM=zeros(SH,1); % zero vector size as HH matrix
-    young_old = HH_data(:,5)==3;
-    old_old = HH_data(:,5)==6;
+    ag = hh_age_group(HH_data);
+    young_old = ag==1;
+    old_old   = ag==2;
 
 
     for u=1:length(unique_stat) 

@@ -760,9 +760,7 @@ for i=1:steps
         diag_allpop_pre_building = HH_data(:,10);
         diag_allpop_pre_svc = Build_Data(diag_locBuildPre, 19);
         diag_allpop_pre_density = Build_Data(diag_locBuildPre, 26);
-        diag_allpop_pre_group = zeros(size(HH_data,1),1); % 0=non-elderly,1=young-old,2=old-old
-        diag_allpop_pre_group(HH_data(:,5)==3) = 1;
-        diag_allpop_pre_group(HH_data(:,5)==6) = 2;
+        diag_allpop_pre_group = hh_age_group(HH_data); % 0=non-elderly,1=young-old,2=old-old
         shock=1;
         [destroyed_B_P, destroyed_B] = earth_quake(Build_Data, [file,'TVR\earthquake_damage.csv']);
         [bad_Assets,Assets,destroyed_B]=shock_A(Assets,destroyed_B);
@@ -1758,8 +1756,9 @@ for i=1:steps
 
     elderly    = HH_data(:,5)>=2;
     nonelderly = ~elderly;
-    young_old  = HH_data(:,5)==3;
-    old_old    = HH_data(:,5)==6;
+    hh_ag      = hh_age_group(HH_data);
+    young_old  = hh_ag==1;
+    old_old    = hh_ag==2;
 
     % --- SA service ratio per HH (commercial-only dynamic col5) ---
     [~,locStat] = ismember(HH_data(:,1), stat_data(:,1));
@@ -1816,20 +1815,22 @@ for i=1:steps
     % Population counts
     Metric_Track(i,6)  = sum(elderly);
     Metric_Track(i,7)  = sum(nonelderly);
-    % 3-way split: HH_data(:,5) encodes 0=non-elderly, 3=young-old
-    % (65-69), 6=old-old (70+) -- confirmed by inspection (only those
-    % three values ever occur, and 3+6 sums exactly to the elderly
-    % count above). col6 above stays young-old+old-old combined.
-    Metric_Track(i,24) = sum(HH_data(:,5)==3); % young-old
-    Metric_Track(i,25) = sum(HH_data(:,5)==6); % old-old
+    % 3-way split via hh_age_group.m: 0=non-elderly, 1=young-old
+    % (65-69), 2=old-old (>=1 member aged 70+). col6 above stays
+    % young-old+old-old combined, so 24+25 == 6.
+    % NOTE: this used to read the split off HH_data col5 (3 vs 6),
+    % which counts elderly MEMBERS, not their age -- that misclassified
+    % ~36% of elderly households. See hh_age_group.m.
+    Metric_Track(i,24) = sum(young_old); % young-old (65-69, no 70+ member)
+    Metric_Track(i,25) = sum(old_old);   % old-old (>=1 member aged 70+)
 
     % --- possible assets metrics from Asset_Avail ---
-    % Asset_Avail cols: [HH_ID(1) ageGroup(2, 0=non-elderly/3=young-old/6=old-old) n_SA(3) n_city(4) tried_SA(5) tried_city(6) success_SA(7) success_city(8)]
+    % Asset_Avail cols: [HH_ID(1) ageGroup(2, 0=non-elderly/1=young-old/2=old-old) n_SA(3) n_city(4) tried_SA(5) tried_city(6) success_SA(7) success_city(8)]
     if size(Asset_Avail,1)>0
-        AA_E  = Asset_Avail(:,2)>=3; % elderly combined (young-old + old-old) -- unchanged semantics
+        AA_E  = Asset_Avail(:,2)>=1; % elderly combined (young-old + old-old) -- unchanged semantics
         AA_NE = Asset_Avail(:,2)==0;
-        AA_YO = Asset_Avail(:,2)==3;
-        AA_OO = Asset_Avail(:,2)==6;
+        AA_YO = Asset_Avail(:,2)==1;
+        AA_OO = Asset_Avail(:,2)==2;
         AA_trSA   = Asset_Avail(:,5)==1;
         AA_trCity = Asset_Avail(:,6)==1;
         AA_sucSA  = Asset_Avail(:,7)==1;

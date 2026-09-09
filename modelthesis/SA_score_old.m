@@ -57,12 +57,13 @@ if isElderly
 
     end
 
-    % Old-old (70+) vs young-old (65-69) differentiation. Old-old takes
-    % priority: a household with >=1 old-old member counts as old-old; an
-    % elderly household with 0 old-old members is young-old. Requires
-    % HH_data col 12 (old_old_count), only present in .mat files built
-    % after the age-split addition (e.g. data_for_model_tmine_agesplit70.mat).
-    isOldOld = HH_data(FFF1,12) >= 1;
+    % Old-old (70+) vs young-old (65-69) differentiation -- see
+    % hh_age_group.m, the single source of truth for this split. It
+    % reads HH_data col 12 (old_old_count), only present in .mat files
+    % built after the age-split addition (e.g.
+    % data_for_model_tmine_agesplit70.mat); on older datasets every
+    % elderly household falls back to young-old.
+    isOldOld = hh_age_group(HH_data,FFF1) == 2;
     wservice_hh = wservice;
     if isOldOld
         wservice_hh = wservice_old; % higher weight for old-old households

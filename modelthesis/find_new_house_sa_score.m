@@ -57,7 +57,7 @@ function [Assets,HH_data,Build_Data,lu,new_a,new_b,hh_change,n_accepted]...
 %       whether a hard filter alone (a guaranteed floor, no extra push)
 %       is enough for young-old, reserving the "reach for the best"
 %       behavior for old-old only.
-% Non-elderly households (HH_data col5==0) are never affected by any mode
+% Non-elderly households (hh_age_group==0) are never affected by any mode
 % -- always the legacy single combined-pool plain pick.
 
 if nargin<15 || isempty(elderly_search_mode); elderly_search_mode=0; end
@@ -68,8 +68,8 @@ hh_change=[];
 new_a=[];
 n_accepted=0;
 
-ageGroup = HH_data(FFF1,5); % 0=non-elderly, 3=young-old, 6=old-old
-isElderly = ageGroup>=3;
+ageGroup = hh_age_group(HH_data,FFF1); % 0=non-elderly, 1=young-old, 2=old-old
+isElderly = ageGroup>=1;
 
 SA=HH_data(FFF1,1);
 
@@ -166,11 +166,11 @@ end
 
 function chosen_sa = pick_weighted_sa(sa_ids, sa_svc, ageGroup)
 % Weight-pick one SA from sa_ids by sa_svc (SA-level service ratio),
-% old-old (ageGroup==6) leaning harder toward the top (svc^2) than
+% old-old (ageGroup==2) leaning harder toward the top (svc^2) than
 % young-old (svc^1) -- same rationale as new_house.m's asset-level pick.
 if size(sa_ids,1)>1
     base_w = sa_svc - min(sa_svc) + eps;
-    if ageGroup==6
+    if ageGroup==2
         w = base_w.^2;
     else
         w = base_w;

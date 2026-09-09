@@ -1027,9 +1027,9 @@ for i=1:steps
     Metric_Track(i,7)  = sum(nonelderly);
 
     % --- possible assets metrics from Asset_Avail ---
-    % Asset_Avail cols: [HH_ID(1) isElderly(2) n_SA(3) n_city(4) tried_SA(5) tried_city(6) success_SA(7) success_city(8)]
+    % Asset_Avail cols: [HH_ID(1) ageGroup(2, 0=non-elderly/1=young-old/2=old-old) n_SA(3) n_city(4) tried_SA(5) tried_city(6) success_SA(7) success_city(8)]
     if size(Asset_Avail,1)>0
-        AA_E  = Asset_Avail(:,2)==1;
+        AA_E  = Asset_Avail(:,2)>=1; % elderly = young-old + old-old
         AA_NE = Asset_Avail(:,2)==0;
         AA_trSA   = Asset_Avail(:,5)==1;
         AA_trCity = Asset_Avail(:,6)==1;

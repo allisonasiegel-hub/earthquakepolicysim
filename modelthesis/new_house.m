@@ -1,10 +1,10 @@
 function [Assets,HH_data,Build_Data,LU,new_A,new_B,HH_change]=new_house(possible_assets,Assets,HH_data,Build_Data,FFF1,weight_pick,yo_exponent,oo_exponent)
 % weight_pick (optional, default false): if true and this household is
-% elderly (HH_data col5 >= 3), bias the pick toward higher-service
+% elderly (hh_age_group >= 1), bias the pick toward higher-service
 % buildings AMONG already-qualifying candidates instead of picking
 % uniformly at random -- eligibility (who even qualifies) is unaffected,
-% only which qualifying option gets picked. Old-old (col5==6) leans
-% harder toward the top of the available range than young-old (col5==3)
+% only which qualifying option gets picked. Old-old (group 2) leans
+% harder toward the top of the available range than young-old (group 1)
 % -- squaring/cubing a set of positive weights increases the relative
 % gap between the best and worst options, so a higher exponent
 % concentrates the pick more on the highest-service candidates.
@@ -19,14 +19,14 @@ HH_change=[];
 if nargin<7 || isempty(yo_exponent); yo_exponent=1; end
 if nargin<8 || isempty(oo_exponent); oo_exponent=2; end
 if size(possible_assets,1)>1
-    ageGroup = HH_data(FFF1,5);
-    if nargin>=6 && weight_pick && ageGroup>=3
+    ageGroup = hh_age_group(HH_data,FFF1); % 0=non-elderly, 1=young-old, 2=old-old
+    if nargin>=6 && weight_pick && ageGroup>=1
         [~,locB] = ismember(possible_assets(:,2), Build_Data(:,1));
         cand_svc = zeros(size(possible_assets,1),1);
         valid = locB>0;
         cand_svc(valid) = Build_Data(locB(valid), 19);
         base_weight = cand_svc - min(cand_svc) + eps; % shift positive; avoid all-zero weights
-        if ageGroup==6
+        if ageGroup==2
             weights = base_weight.^oo_exponent; % old-old: lean harder toward the top
         else
             weights = base_weight.^yo_exponent; % young-old: milder lean
