@@ -16,7 +16,7 @@ below since they didn't exist when this audit was first written.
 | # | Location | Constant / formula | Was (daily) | Now (weekly) | Status |
 |---|---|---|---|---|---|
 | 1 | `migration_19.m` | `x = sas_data(i,5)/365` (inOutRatio) | annual rate → daily | `/52` | **Done** |
-| 2 | `read_sas_data.m` (feeds `who_is_moving.m` K=2/K=3) | `intraSAProb`/`intraYeshuvProb` vs. per-step random draw | daily move probability (confirmed) | `p_week = 1-(1-p_day)^7`, applied at load time to cols 2-3 | **Done** |
+| 2 | `read_sas_data.m` (feeds `who_is_moving.m` K=2/K=3) | `intraSAProb`/`intraYeshuvProb` vs. per-step random draw | daily move probability (confirmed for Ashkelon) | `p_week = 1-(1-p_day)^7`, applied at load time to cols 2-3 | **Done for Ashkelon; Tiberias needed a separate fix, see below** |
 | 3 | `run_model_earthquake_shelteroverflow.m` | `subsidy_duration` | 60 (~2 months) | 9 | **Done** |
 | 4 | ~~`max_shelter_duration`~~ | — | — | — | Removed (mechanism deleted, N/A) |
 | 5 | `run_model_earthquake_shelteroverflow.m` (two occurrences) | `VISITS` rolling window `>31` | ~1 month | `>5` (4-step window + ID col) | **Done** |
@@ -44,6 +44,25 @@ below since they didn't exist when this audit was first written.
   `run_model_earthquake.m` - same rescale-shared-functions decision as
   above). `interYeshuvProb` (col 4) is loaded but never actually used
   anywhere in the codebase, so left unconverted.
+  - **Correction (Tiberias only, found later):** the "daily probability"
+    confirmation above didn't hold for Tiberias's raw data - its median
+    `intraSAProb` (0.0256) is ~1000x larger than Ashkelon's (0.0000336),
+    the same "dimensionless ratio misused as an annual rate" pattern
+    already found and fixed for `inOutRatio` in this same file (see
+    `migration_19.m`). Confirmed via profiling: Tiberias was running
+    11.7x slower than Ashkelon per step despite having fewer households
+    (18k vs 36k) - `find_new_house_yeshuv`/`SA_score_old` were being
+    called ~5,755 times/step because ~10-48% of the population was
+    attempting a move every single week under the daily-rate
+    interpretation. Reinterpreting Tiberias's raw values as ANNUAL
+    rates (`p_week = 1-(1-p_annual)^(7/365)`, applied Tiberias-only in
+    `run_model_earthquake_shelteroverflow.m` right after the
+    `read_sas_data` call) brings them to within ~2-5x of Ashkelon's
+    scale and empirically fixed both the runaway movement behavior and
+    the performance (now faster than Ashkelon, as expected for a
+    smaller population). Ashkelon's own values were left untouched -
+    the original daily-probability conversion still holds for that
+    city's data.
 - Item 7 (`lu_update_every`) is a policy choice about update cadence, not
   a mechanical unit conversion - left as-is pending an explicit decision.
 - Items 11-12 (wage adjustment): empirically tested rather than

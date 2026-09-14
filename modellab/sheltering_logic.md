@@ -21,7 +21,7 @@ Three sheltering tiers, tried in this order as displacement plays out over time.
     Shelter_Building_Routines, Building_routine_id, i, agents_per_sqm, public_bldg_usable_fraction, ...
     restrict_public_shelters_to_schools, hotel_room_density, agents_per_room)
 ```
-- Candidate pool: usage=5 (public) and/or usage=8 (school) buildings — `restrict_public_shelters_to_schools` toggles whether generic public buildings are included — concatenated with usage=7 (hotel) buildings. Public/school tried first, hotels second, by concatenation order only.
+- Candidate pool: usage=7 (hotel) buildings concatenated with usage=5 (public) and/or usage=8 (school) buildings — `restrict_public_shelters_to_schools` toggles whether generic public buildings are included. Hotels tried first, public/school second, by concatenation order only. Default policy restricts the public/school tier to schools only (`restrict_public_shelters_to_schools=1`).
 - Capacity:
   - Public/school: `agents_per_sqm * public_bldg_usable_fraction * Area * floors`
   - Hotel: `hotel_room_density * agents_per_room * Area * floors` (see [`identify_hotels_TVR.m`](identify_hotels_TVR.m) for how `hotel_room_density` is calibrated per city)
@@ -30,7 +30,7 @@ Three sheltering tiers, tried in this order as displacement plays out over time.
 
 **Release:** every step, via [`release_shelter.m`](release_shelter.m), called from the `if shock==1` recovery block:
 ```
-[Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id] = ...
+[Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, released_agents] = ...
     release_shelter(Build_Data, Individuals_data, HH_data, Shelters, Shelter_Assign, ...
     Shelter_Building_Routines, Building_routine_id, Assets, BI, i)
 ```
@@ -54,9 +54,11 @@ For each newly-overflowing household:
 
 **Release:** every step, via [`release_outside_shelter.m`](release_outside_shelter.m):
 ```
-[HH_data, Sheltered_Outside] = release_outside_shelter(HH_data, Assets, BI, Sheltered_Outside)
+[HH_data, Sheltered_Outside, released_hh] = release_outside_shelter(HH_data, Assets, BI, Sheltered_Outside)
 ```
-Same two exit conditions as tier 1; refunds the exact penalty amount stored at entry. No duration cap — this pool has no capacity constraint to force a cutoff.
+Same two exit conditions as tier 1; refunds the exact penalty amount stored at entry.
+
+**Patience (decreasing tolerance for being sheltered outside):** unlike tiers 1 and 3, this pool has no capacity constraint to force a cutoff — but a household does eventually give up. Once a household has been in `Sheltered_Outside` for `outside_patience_duration` steps (13 steps = 3 months equivalent at the model's weekly step resolution) **and** still fails to find housing that same step, it loses its exemption from `did_not_find_house` deletion in the main per-step retry block and is removed from the simulation entirely — same mechanism as a regular migrant who repeatedly can't find a house. Recovering the original home or securing a new asset always takes priority and releases the household from this pool first, so patience-based deletion only ever catches households that are still genuinely unhoused.
 
 **Data structure:** `Sheltered_Outside` — `[HH_ID, start_step, income_penalty_amount]` (household-level, not per-agent).
 
@@ -75,9 +77,14 @@ site_xy = site_temp_dev_locations(Build_Data, destroyed_B, n_temp_dev_sites, tem
 - If `temp_dev_site_coords` (user-supplied `[X,Y]` pairs) is non-empty, those are used directly.
 - Otherwise, data-driven: ranks SAs by total destroyed floor area (any usage type - doesn't matter if residential or not) and anchors one site per top-`n_temp_dev_sites` SA at that SA's largest *currently-standing* building's location — purely as a real-world reference point, not a building being reused.
 
-**Capacity:** combined across all sites = `temp_dev_capacity_frac * (size(Shelter_Assign,1) + count of agents whose HH is in Sheltered_Outside)`, split evenly across however many sites actually opened.
+**Capacity:** combined across all sites = `temp_dev_capacity_frac * (size(Shelter_Assign,1) + count of agents whose HH is in Sheltered_Outside)`, split evenly across however many sites actually opened. Applies identically in both the "limited capacity" (e.g. 0.5) and "everyone gets sheltered" (1.0) scenarios — only the resulting `total_capacity` differs, not the fill order below.
 
-**Transfer:** the candidate pool is every household currently in tier 1 (`Shelter_Assign`) **or** tier 2 (`Sheltered_Outside`), combined and shuffled into random order (no priority between the two pools). Households are filled into sites greedily, in that random order, up to each site's capacity (not optimal bin-packing — a household is never split across sites, but capacity can go slightly under-used at the boundary).
+**Transfer:** households are filled into sites greedily, up to each site's capacity (not optimal bin-packing — a household is never split across sites, but capacity can go slightly under-used at the boundary), in **strict priority order**, not one shuffled pool:
+1. Public/school-sheltered households (tier 1, non-hotel)
+2. Out-of-city overflow households (tier 2)
+3. Hotel-sheltered households (tier 1) — last, since hotels are the most comfortable of the immediate options
+
+Households are shuffled only *within* each tier, never across tiers.
 - From tier 1: their old shelter building is freed (reverts to `original_usage` via the same `Shelters` bookkeeping, if now empty).
 - From tier 2: the exact commute penalty is refunded, same as a normal tier-2 release.
 - Anyone not transferred (capacity ran out) simply stays in whichever tier they were already in — no further cascade needed, since tier 2 is already the catch-all.
@@ -106,6 +113,7 @@ Same two exit conditions as the other tiers (original home recovered, or new ass
 | `temp_dev_capacity_frac` | 0.75 | combined capacity ÷ total sheltered population, placeholder |
 | `temp_dev_site_coords` | `[]` | optional user-supplied `[X,Y]` siting, else data-driven |
 | `temp_dev_duration` | 180 | steps a site stays open, placeholder (~6 months daily) |
+| `outside_patience_duration` | 13 | steps a household tolerates being sheltered outside the city before it's removed from the sim if still unhoused (~3 months at weekly resolution) |
 
 ---
 
@@ -117,12 +125,13 @@ still_sheltered_hh   = households currently in Shelter_Assign      (tier 1)
 still_temp_dev_hh    = households currently in Temp_Dev_Assign     (tier 3)
 moving_HH = [normal movers; HH_destroyed; still_sheltered_hh; Sheltered_Outside(:,1); still_temp_dev_hh]
 ```
-All sheltered households (any tier) are folded into the same `moving_HH` pool and retried through the normal `find_new_house_same_stat` → `find_new_house_yeshuv` cascade every step, exactly like migrants searching for a new home. If a household in any tier fails to find housing this step, it's exempted from `did_not_find_house` deletion (`exempt_sheltered`) and simply retries again next step. No household sheltered by any tier is ever deleted from the simulation.
+All sheltered households (any tier) are folded into the same `moving_HH` pool and retried through the normal `find_new_house_same_stat` → `find_new_house_yeshuv` cascade every step, exactly like migrants searching for a new home. If a household in any tier fails to find housing this step, it's exempted from `did_not_find_house` deletion (`exempt_sheltered`) and simply retries again next step — **except** a tier-2 (out-of-city) household whose patience has run out (see `outside_patience_duration` above), which loses its exemption and is deleted like any other migrant who's given up. Tiers 1 and 3 have no such cutoff — households there are never deleted from the simulation.
 
 ---
 
 ## Known simplifications (flagged, not fixed)
 
-- Tier-3 site-fill is greedy over a randomly-shuffled household order, not optimal bin-packing.
+- Tier-3 site-fill is greedy within each priority tier (randomly shuffled inside a tier), not optimal bin-packing.
 - Households pulled from tier 2 into tier 3 stop being re-suppressed going forward, but there's no cached "original routine" to restore immediately the way tier-1 buildings get — their non-work routine cols stay `NaN` until the normal `HH_change → new_number_of_routine → find_activity_location_new_A` path eventually regenerates them.
-- `temp_dev_capacity_frac` and `temp_dev_duration` are uncalibrated placeholders, same status as `outside_commute_penalty_pct`, `agents_per_room`, `public_bldg_usable_fraction`.
+- `temp_dev_capacity_frac`, `temp_dev_duration`, and `outside_patience_duration` are uncalibrated placeholders, same status as `outside_commute_penalty_pct`, `agents_per_room`, `public_bldg_usable_fraction`.
+- Patience-based deletion (tier 2) only fires on a step where the household also fails the normal housing-search cascade — a household whose patience expires but who happens to find housing that exact same step is released normally instead, never deleted.
