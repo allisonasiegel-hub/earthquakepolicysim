@@ -11,30 +11,8 @@ on recovery outcomes over time.
 **Main run script:** [`run_model_earthquake_shelteroverflow.m`](run_model_earthquake_shelteroverflow.m).
 Set `city` (`'Ashkelon'`, `'Tiberias'`, or `'Jerusalem'` — see Data section)
 and `shock_step` before calling `run()`; a per-SA damage table must exist at
-`[file,'earthquake_damage.csv']` for whichever city is selected. Ashkelon,
-Tiberias, and Jerusalem all now have calibrated `commute_outside`/
-`alfa`/`beta`/`lamda`/`delta` constants (Jerusalem's `commute_outside` is a
-best-available data-driven placeholder, not independently cross-validated
-the way Ashkelon/Tiberias's are — see the city configuration block's own
-comment). Ready-made per-city driver scripts exist for the validated
-calibrations:
-[`run_ashkelon_baseline_step25_150.m`](run_ashkelon_baseline_step25_150.m)
-/
-[`run_ashkelon_shock_step25_150.m`](run_ashkelon_shock_step25_150.m)
-(no-shock baseline / shock scenario — see "Validated shock scenario
-configuration" below),
-[`run_tiberias_calibrated.m`](run_tiberias_calibrated.m)
-(no-shock baseline, `steps=150`),
-[`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m)
-(shock scenario, aligned to Ashkelon's setup),
-[`run_jerusalem_calibrated.m`](run_jerusalem_calibrated.m).
-(Each city's `earthquakeF/*.mat` output filename prefix comes from
-splitting its `data` variable on `_` and keeping the last token — Ashkelon
-gets `"Ash2hotels EQ S..."`, Tiberias gets a bare `"hotels EQ S..."`
-(from `data_for_model_TVR_hotels`). Baseline and shock runs of the same
-city share that same prefix regardless of `shock_step` — they're only
-distinguishable by the `shock_step` value saved inside each file, not by
-filename.)
+`[file,'earthquake_damage.csv']` for whichever city is selected. See Quick
+Start below for the ready-made driver scripts that set this up for you.
 
 `run_model_earthquake.m` is an earlier, simpler variant without the
 out-of-city overflow tier (see Policies section) — kept for reference, not
@@ -42,36 +20,76 @@ actively maintained in parallel with the main script.
 
 ---
 
+## Quick Start
+
+To run a validated scenario for a city, use its driver script directly — in
+MATLAB, `run('<driver_name>.m')`, or open it and run from the editor.
+
+| City | Baseline (no shock) | Shock scenario |
+|---|---|---|
+| Ashkelon | [`run_ashkelon_baseline_step25_150.m`](run_ashkelon_baseline_step25_150.m) | [`run_ashkelon_shock_step25_150.m`](run_ashkelon_shock_step25_150.m) |
+| Tiberias | [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m) | [`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m) |
+| Jerusalem | [`run_jerusalem_calibrated.m`](run_jerusalem_calibrated.m) | — (not yet validated for a shock scenario) |
+
+Output saves to `earthquakeF/<prefix> EQ S <timestamp> <replicate#> <pid>.mat`.
+Re-running a driver adds more replicates on top of whatever's already there,
+rather than overwriting previous output.
+
+For the reasoning behind the specific settings these drivers use
+(`shock_step=25`, `steps=150`, etc.), see "Validated shock scenario
+configuration" under Policies and mechanisms below.
+
+---
+
+## Standard output
+
+To generate a standard report from one or more runs, use
+[`plot_macro_comparison.py`](plot_macro_comparison.py):
+
+```
+python plot_macro_comparison.py --city Ashkelon
+python plot_macro_comparison.py --city Ashkelon --city Tiberias   # side-by-side comparison
+```
+
+This produces, in `plots_macro_comparison/` by default (`--out` to change it):
+
+- `macro_trends.png` — overview grid, all 30 `SA_*` macro variables
+  (population, prices, jobs, wages, etc.) at a glance
+- `macro_trends.pdf` — one full-size page per variable, preceded by a
+  shelter & reconstruction outcomes table and, for any scenario with a
+  firing shock, total-households-sheltered and cumulative-permanent-
+  displacement pages
+- `macro_pngs/<VAR>.png` — each variable as its own PNG
+- `shelter_tiers.png` / `total_sheltered.png` / `permanent_displacement.png`
+  — the same shock-scenario outcome charts as standalone PNGs
+
+**Caveat:** baseline and shock runs of the same city share the same
+`earthquakeF/` filename prefix (see Quick Start above), so `--city Ashkelon`
+sweeps in *every* Ashkelon run ever saved there, mixing baseline and shock
+replicates together. To isolate one specific run (or compare exactly two),
+use `--pattern` with that run's own timestamp instead:
+
+```
+python plot_macro_comparison.py --pattern "Ash2hotels EQ S 20260915_1401*" --label "My shock run"
+```
+
+---
+
 ## Data
 
 ### Data required to run the model directly
 
-Each city needs a compiled `.mat` dataset (e.g. `data_for_model_Ash2hotels.mat`,
-`data_for_model_TVR_hotels.mat`) containing `Assets`, `Build_Data`, `HH_data`,
-`Individuals_data`, `Work_places` (plus their `_P`/`_p` header-name
-companions), and a `sas_national.xlsx` (15-column raw layout) and
-`commuting.xlsx` in that city's data folder. A per-SA `earthquake_damage.csv`
-(columns `SAID`, `dmg_prc`) is required to actually trigger a shock.
+Each city needs a compiled `.mat` dataset containing `Assets`, `Build_Data`,
+`HH_data`, `Individuals_data`, `Work_places` (plus their `_P`/`_p`
+header-name companions), a `sas_national.xlsx` and `commuting.xlsx` in that
+city's data folder, and a per-SA `earthquake_damage.csv` (columns `SAID`,
+`dmg_prc`) to actually trigger a shock.
 
-Both Ashkelon and Tiberias now have hotel buildings tagged (usage=7) as a
-shelter type: `identify_hotels_TVR.m` (39 buildings, Tiberias) and
-[`identify_hotels_ASH.m`](identify_hotels_ASH.m) (3 buildings, matched by
-real-world coordinates via [`wgs84_to_itm.m`](wgs84_to_itm.m)). Use the
-`...hotels` variant of each city's dataset
-(`data_for_model_Ash2hotels.mat`/`data_for_model_TVR_hotels.mat`), not the
-plain one — drop-in replacement, identical except for the hotel tagging.
-
-Ashkelon's `ASH22\sas_national.xlsx` was previously a different 5-column
-pre-summarized format, incompatible with `read_sas_data.m`'s hardcoded
-15-column layout — it's now been replaced with the correctly-formatted,
-Ashkelon-specific content (originally `sas_national1.xlsx`); the old
-incompatible file is preserved at
-`ASH22/sas_national_5col_incompatible_backup.xlsx` for reference. Since that
-table doesn't cover every SA Ashkelon's `Build_Data` references, a per-city
-backfill (donor-row copy from a random existing SA) runs at load time in
-`run_model_earthquake_shelteroverflow.m` for any missing rows — see that
-block's comment for why this is a per-city choice, not a general fallback in
-`read_sas_data.m` itself.
+Use the hotel-tagged dataset for each city — `data_for_model_Ash2hotels.mat`
+(Ashkelon) / `data_for_model_TVR_hotels.mat` (Tiberias). Both cities have
+hotel buildings tagged (usage=7) as a shelter type:
+[`identify_hotels_ASH.m`](identify_hotels_ASH.m) (3 buildings, Ashkelon) and
+`identify_hotels_TVR.m` (39 buildings, Tiberias).
 
 ### Data required to build a new city's dataset (`data_allocation/`)
 
@@ -90,52 +108,13 @@ Ashkelon, Tiberias, and Jerusalem have complete, working compiled datasets.
 Arad is configured as a city option but has no compiled `.mat` yet (see
 Untested/Outstanding section).
 
-### Validating a city's allocation output, and the Jerusalem fix history
+### Validating a city's allocation output
 
 `data_allocation/validate_allocation.py` / `plot_allocation.py` check a
 compiled city's synthetic population against the census data it was built
-from — structural consistency (duplicate IDs, orphaned records, negative
-prices), demographics (age/household-size/elderly shares), income deciles,
-car ownership, and labor-force participation/commuting shares. City-agnostic:
-`python validate_allocation.py --city JER` derives all paths (`.mat`, census
-CSV, report output) from the city name. Full usage and how to interpret a
-FAIL: [`data_allocation/VALIDATION_AND_FIXES.md`](data_allocation/VALIDATION_AND_FIXES.md).
-
-Bringing Jerusalem to a clean validation state (12 FAILs → 0) surfaced four
-real code bugs, now fixed for every city using this pipeline, plus one
-corrupted census input file:
-
-- **`create_HH_12_2018.m`** — elderly-household count was being recomputed
-  from a raw population headcount partway through the function (dividing by
-  100 and multiplying by SA population inflated it ~10x), overriding the
-  correct, earlier household-based estimate and badly over-assigning elderly
-  status (38% vs. census 27%).
-- **`start_HH_2018up.m`** — Jerusalem's census extract has `comm31`/`comm34`
-  (metro-zone commuting shares) completely empty for every SA, which the
-  generic NaN-fill can't repair (mean of all-NaN is NaN). Added an explicit
-  derivation: `comm31 = 1 - comm99`, `comm34 = 0`.
-- **`distribute_workers.m`** — before the fix above, a NaN commuting target
-  was silently treated as "the entire remaining worker pool" instead of 0
-  (MATLAB's `min` ignores NaN), so 100% of workers ended up local instead of
-  the real ~87%/13% split, and a second, independent bug in the fallback
-  assignment branch could request more workplace assignments than remained
-  in the pool. Fixed with an explicit NaN-to-zero fallback and a
-  `min(length(B),length(F))` cap.
-- **`labor_datasample.m`** — "currently working" status was sampled from the
-  entire labor-eligible population instead of the `want_work` subset it was
-  meant to upgrade, inflating simulated labor-force participation (81.7% vs.
-  census 62.2%).
-- **Census data**: Jerusalem's `sa_data_b7.csv` had corrupted household-size
-  percentage columns (summing to a mean of 144% instead of ~100%, with many
-  rows showing exact duplicate values across supposedly-independent size
-  buckets) — the root cause of the remaining FAILs after all four code fixes
-  above. Patched from a second, independently-sourced clean census export;
-  original preserved at `JER/sa_data_b7_ORIGINAL_BACKUP.csv`.
-
-If another city's validation shows FAILs in the household-size/kid-share/
-adult-share cluster, check the census file's size-bucket columns sum to
-~100% first — that failure mode is bad input, not bad code, and no code
-change fully substitutes for a clean source file.
+from. City-agnostic: `python validate_allocation.py --city JER` derives all
+paths from the city name. Full usage and how to interpret a FAIL:
+[`data_allocation/VALIDATION_AND_FIXES.md`](data_allocation/VALIDATION_AND_FIXES.md).
 
 ---
 
@@ -212,21 +191,15 @@ to find housing:
 
 - **`outside_patience_duration`** (default 4 weeks) — applies to
   out-of-city overflow households (`Sheltered_Outside`), and to households
-  displaced by a land-use conversion of their home to commercial use (see
-  `LU_Displaced` below). Elapsed time is measured from whichever is later:
+  displaced by a land-use conversion of their home to commercial use
+  (`LU_Displaced`). Elapsed time is measured from whichever is later:
   the household's own entry into the pool, or stage-2 onset — since stage 1
   has no search attempts at all, the patience clock can't start before
   stage 2 regardless of nominal entry time.
-- **`tempdev_patience_duration`** (default 8 weeks, ported from Ashkelon's
-  calibration — was `Inf`/no per-household cap) — same mechanic, for
-  households in `Temp_Dev_Assign`. Before this was set, only the small
-  out-of-city-overflow and land-use-eviction pools could ever produce a
-  permanently-displaced household — immediate shelter and temp-dev (the
-  two largest pools) had no cap at all, so a household there would retry
-  indefinitely regardless of how long housing search took. Set together
-  with `temp_dev_duration=Inf` to replace the site-closure/transfer
-  mechanic entirely with a clean "N steps in temp-dev or permanently
-  displaced" rule.
+- **`tempdev_patience_duration`** (default 8 weeks) — same mechanic, for
+  households in `Temp_Dev_Assign`. Set together with `temp_dev_duration=Inf`
+  to replace the site-closure/transfer mechanic entirely with a clean "N
+  steps in temp-dev or permanently displaced" rule.
 - Recovering the original home or securing a new asset always takes
   priority and releases a household from these pools first — patience-based
   departure only ever catches households still genuinely unresolved once
@@ -234,22 +207,6 @@ to find housing:
 - Tracked in `n_permanently_displaced_total`/`n_permanently_displaced_track`
   — the only channel through which shock-caused population loss doesn't
   eventually recover.
-
-### Land-use eviction retry (`LU_Displaced`)
-
-Households whose home gets converted to commercial use by the land-use
-block get the same multi-step retry grace period as the sheltering tiers
-(`LU_Displaced` pool, `outside_patience_duration`), instead of being deleted
-the same step their building converts. Needed because the land-use
-conversion selection (`Change_LU`) is a percentile cut of the *entire*
-eligible building stock, not just newly-crossing buildings — its first-ever
-activation therefore flags a large one-time batch of the whole untouched
-residential stock at once. Before this fix: ~6,250 households evicted in a
-single step, overwhelming the same-step housing search and getting
-force-deleted — visible in every macro trend as an early population
-dip-and-recovery artifact. Retrying over several steps (like any other
-displaced household already does) fixes this without touching the
-conversion ranking/calibration itself.
 
 ### Building reconstruction
 
@@ -298,13 +255,7 @@ independently re-checked and ported to Tiberias (2026-09-15):
   transfer-to-overflow mechanic, so temp-dev departures happen only via
   `tempdev_patience_duration` (per-household patience) instead of two
   competing exit mechanisms. See "Decreasing patience" above.
-- Ready-made drivers:
-  [`run_ashkelon_shock_step25_150.m`](run_ashkelon_shock_step25_150.m) /
-  [`run_ashkelon_baseline_step25_150.m`](run_ashkelon_baseline_step25_150.m)
-  for Ashkelon, and
-  [`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m) /
-  [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m) for Tiberias
-  (shock / no-shock baseline pairs, matched `steps=150` on both sides).
+- Ready-made drivers: see Quick Start above.
 - `n_sims=1` (run as its own process) is used for the shock driver,
   mirroring Ashkelon's same caution — that scenario type has an
   unexplained-crash history at `n_sims>=2` in one process for Ashkelon;
@@ -344,9 +295,6 @@ seed instead, for exact reproducibility when that's wanted.
   tier has never been used at all (e.g. `restrict_public_shelters_to_schools`
   on a city with no tagged schools). Fixed with the same `isempty` guard the
   rest of the codebase already used elsewhere.
-- **Land-use percentile-ranking loops (performance)** — see Optimizations
-  below; not a correctness bug, but worth listing alongside the other
-  land-use-block changes.
 - **`new_house.m` never synced a household's SA after a cross-SA move** —
   `HH_data`'s SA column (col 1) was only ever set at initial assignment; a
   household relocating to a different SA (via same-yeshuv/other-yeshuv
@@ -398,16 +346,6 @@ seed instead, for exact reproducibility when that's wanted.
   never actually engaged in *any* prior run of this script, for any city.
   Fixed by comparing against column `i-3` instead of `i`, with a `>0` guard
   (falls back to a neutral ratio of 1 if even that's somehow unpopulated).
-- **Ambiguous household-ID guard (`LU_Displaced` retry pool)** — household
-  IDs are minted via `max(HH_data(:,2))+1` at creation (e.g. by
-  `migration_19.m`); if the household holding the running-max ID is later
-  deleted, a subsequent migrant can be issued that same numeric ID again,
-  producing two `HH_data` rows sharing one ID. Rare in general, but the
-  odds of hitting it are much higher for a large, long-lived retry pool like
-  `LU_Displaced`, where `find_new_house_same_stat` assumes exactly one match
-  per ID and errors on a size mismatch otherwise. Fixed by detecting
-  duplicate IDs (`accumarray` count > 1) and excluding them from the retry
-  batch defensively.
 - **Tiberias `intraSAProb`/`intraYeshuvProb` misread as daily rates** —
   `read_sas_data.m` converts these columns from daily to weekly probability
   (`1-(1-p)^7`), confirmed correct for Ashkelon, but Tiberias's raw values
@@ -445,51 +383,14 @@ seed instead, for exact reproducibility when that's wanted.
   worker array. Fixed by clamping demand to the currently-remaining worker
   count before each zone's assignment, with defensive handling for missing
   commuting-probability data.
-
----
-
-## Updates from recent design review
-
-### Temporal resolution: daily → weekly steps
-
-Every mechanically-fixable daily rate/duration/cadence constant was
-converted to its weekly equivalent — `RECOVERY`, `subsidy_duration`, the
-`VISITS` rolling window, `lu_warmup`, the SA/price update cadence, the
-job-search patience curve, `migration_19.m`'s `inOutRatio`,
-`read_sas_data.m`'s `intraSAProb`/`intraYeshuvProb`, and the medium-term
-sheltering timing constants. `lu_update_every` (land-use update cadence) was
-deliberately left unconverted — an explicit policy choice, not a unit
-conversion. The wage-adjustment mechanism (`income_ratio`, driven by
-`alfa/beta/lamda/delta`) was tested empirically rather than analytically
-fixed (see Untested/Outstanding below) and accepted as-is. Full derivation
-table and decision log: [`day_to_week_step_rescaling_audit.md`](day_to_week_step_rescaling_audit.md).
-
-### Validation added
-
-- Empirical daily-vs-weekly comparison methodology (4 replicates each, fixed
-  real-world time span, no-shock baseline) — used for both the wage-
-  adjustment test and the job-search investigation below. Reusable pattern
-  for testing any future step-size-sensitive mechanism.
-- Numerical regression testing for the land-use vectorization changes (200
-  randomized trials, old-loop output vs. new-vectorized output, including
-  edge cases) before those changes were considered safe to commit.
-- Reconstruction-rate mechanism validated against its own theoretical
-  expectation (observed ~35.3% recovered after 60 weeks vs. ~35.2%
-  predicted).
-
-### Design changes still open (not yet implemented)
-
-Raised in review but not built yet — flagged here rather than silently
-deferred:
-
-- **Housing search informed by the household's previous asset.** Currently a
-  sheltered household's housing search is identical to any other mover's,
-  with no reference to the asset it lost (price tier, size, SA).
-- **Out-of-city commuting agents' routines.** Currently a blunt placeholder:
-  all non-work routine columns are hard-suppressed (NaN'd) plus a separate
-  flat income penalty. The intended design is more specific — routines
-  starting at the workplace, with the commute penalty factored into the
-  *computed number of activities* rather than just zeroing everything out.
+- **`create_HH_12_2018.m`** — elderly-household count was being recomputed
+  from a raw population headcount partway through the function, overriding
+  the correct, earlier household-based estimate and badly over-assigning
+  elderly status (38% vs. census 27%).
+- **`labor_datasample.m`** — "currently working" status was sampled from the
+  entire labor-eligible population instead of the `want_work` subset it was
+  meant to upgrade, inflating simulated labor-force participation (81.7% vs.
+  census 62.2%).
 
 ---
 
@@ -498,19 +399,14 @@ deferred:
 **Uncalibrated placeholders** (present in the code, not yet set through
 sensitivity testing): `agents_per_room`, `public_bldg_usable_fraction`,
 `outside_commute_penalty_pct`, `temp_dev_capacity_frac`, `temp_dev_duration`,
-`temp_dev_delay`. `outside_patience_duration` (default 4 weeks) was set from
-a single empirical comparison against Ashkelon's shock+hotels scenario (56
-permanent departures out of a ~471 peak overflow at 4 steps, vs. just 1 at
-the previous default of 13) — re-validate if `steps`/`shock_step` change
-substantially. `tempdev_patience_duration` (default 8 weeks) is the same
-Ashkelon-calibrated pair as `outside_patience_duration=4` — both ported
-into Tiberias's shock scenario 2026-09-15. Both are the values Ashkelon
-uses, applied to Tiberias without independent Tiberias-specific
-sensitivity testing of the durations themselves (only the surrounding
-`shock_step`/`steps`/`temp_dev_duration` configuration was independently
-re-verified for Tiberias — see "Validated shock scenario configuration"
-above); permanent-displacement counts are sensitive to these, so revisit
-if that matters for a given run.
+`temp_dev_delay`. `outside_patience_duration` (default 4 weeks) and
+`tempdev_patience_duration` (default 8 weeks) were both calibrated against
+Ashkelon's shock scenario and ported to Tiberias without independent
+Tiberias-specific sensitivity testing of the durations themselves (only the
+surrounding `shock_step`/`steps`/`temp_dev_duration` configuration was
+independently re-verified for Tiberias — see "Validated shock scenario
+configuration" above); permanent-displacement counts are sensitive to these,
+so revisit if that matters for a given run.
 
 **Temporal-resolution gaps identified but not resolved:**
 - **Job search** — confirmed structural issue. Each job-seeker gets exactly
@@ -522,22 +418,6 @@ if that matters for a given run.
   (`new_jobs`/`lost_jobs`/`Change_LU` bands) may trigger land-use changes at
   a different real-world rate now that snapshots are a week apart instead of
   a day apart. Flagged as plausible, not empirically tested.
-- **Housing search volume** — reviewed and found not to need changes (a
-  household evaluates the full currently-vacant asset pool per attempt, no
-  per-step throttle analogous to job search).
-
-**Superseded — see Bug fixes above for what was actually done:**
-- The `who_is_moving.m` daily-vs-annual question and the `migration_19.m`
-  growth-rate overshoot were both revisited after this note was originally
-  written. The daily-rate premise held for Ashkelon but **not** for
-  Tiberias (its raw `intraSAProb`/`intraYeshuvProb` are ~1000x larger than
-  Ashkelon's) — Tiberias now gets an annual-rate reinterpretation,
-  Ashkelon is untouched. `migration_19.m`'s mechanism itself was
-  deliberately kept as-is (not switched to a real-growth-rate approach —
-  real per-SA growth data only exists for Tiberias, not Ashkelon), but
-  Tiberias's `inOutRatio` now gets an empirical scalar correction to bring
-  simulated growth back in line with real census data. See the two Tiberias
-  entries in Bug fixes above for the full detail and evidence.
 
 **Other unfinished items:**
 - Arad has no compiled dataset yet (a city option exists, but there's
@@ -550,41 +430,3 @@ if that matters for a given run.
   default `1.79`) was derived from a single no-shock 200-step run and
   hasn't been re-validated against a shock scenario or a different run
   length.
-
----
-
-## Performance
-
-`run_uid` (OS process ID) is now baked into every output filename — lets
-multiple independent `matlab -batch` invocations (different parameter
-combinations, different replicates) run concurrently without overwriting
-each other's saved output. The model's per-step loop is inherently
-sequential (each step depends on the previous one's state) and isn't a
-target for internal parallelization; parallelism here means running multiple
-independent simulations at once, which this filename fix makes safe.
-
-Three percentile-ranking loops in the land-use block were replaced with
-vectorized equivalents (visit-count ranking, salary ranking, and the
-commercial-conversion candidate ranking) — verified with 200 randomized
-regression trials comparing old-loop output to new-vectorized output before
-being applied (this caught a real off-by-one error and a single-candidate
-edge case in the first draft of the vectorization).
-
-The monthly SA-metrics update block (25 metrics — price, population, jobs,
-wages, service ratios, etc., every 4 steps) was similarly vectorized (ported
-from `modelthesis/run_model_earthquake.m`, commit `9b078e7`): a ~20-SA loop
-that rescanned the *entire* `Assets`/`Build_Data`/`Work_places`/
-`Individuals_data`/`HH_data` arrays from scratch for every one of ~22
-metrics is now precomputed group indices + `accumarray` — verified
-numerically identical to the original (25/25 metrics matched exactly on
-real Tiberias data, one metric differing by `9e-13`, pure floating-point
-summation-order noise).
-
-Tiberias-specific: the `intraSAProb`/`intraYeshuvProb`/`inOutRatio` fixes
-described in Bug fixes above were also, incidentally, a major performance
-fix — the misread rates caused ~5,755 expensive housing-search calls per
-step (a huge share of the population attempting a move every single week),
-making Tiberias run **11.7x slower than Ashkelon despite having fewer
-households**. After the fix, a 200-step 2-replicate Tiberias baseline
-completes in ~8–17 minutes (was previously taking multiple days and, in one
-case, never completing at all).
