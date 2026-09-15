@@ -17,12 +17,24 @@ Tiberias, and Jerusalem all now have calibrated `commute_outside`/
 best-available data-driven placeholder, not independently cross-validated
 the way Ashkelon/Tiberias's are — see the city configuration block's own
 comment). Ready-made per-city driver scripts exist for the validated
-calibrations: [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m)
+calibrations:
+[`run_ashkelon_baseline_step25_150.m`](run_ashkelon_baseline_step25_150.m)
+/
+[`run_ashkelon_shock_step25_150.m`](run_ashkelon_shock_step25_150.m)
+(no-shock baseline / shock scenario — see "Validated shock scenario
+configuration" below),
+[`run_tiberias_calibrated.m`](run_tiberias_calibrated.m)
 (no-shock baseline, `steps=150`),
 [`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m)
-(shock scenario, aligned to Ashkelon's current setup — see "Validated
-shock scenario configuration" below),
+(shock scenario, aligned to Ashkelon's setup),
 [`run_jerusalem_calibrated.m`](run_jerusalem_calibrated.m).
+(Each city's `earthquakeF/*.mat` output filename prefix comes from
+splitting its `data` variable on `_` and keeping the last token — Ashkelon
+gets `"Ash2hotels EQ S..."`, Tiberias gets a bare `"hotels EQ S..."`
+(from `data_for_model_TVR_hotels`). Baseline and shock runs of the same
+city share that same prefix regardless of `shock_step` — they're only
+distinguishable by the `shock_step` value saved inside each file, not by
+filename.)
 
 `run_model_earthquake.m` is an earlier, simpler variant without the
 out-of-city overflow tier (see Policies section) — kept for reference, not
@@ -287,10 +299,12 @@ independently re-checked and ported to Tiberias (2026-09-15):
   `tempdev_patience_duration` (per-household patience) instead of two
   competing exit mechanisms. See "Decreasing patience" above.
 - Ready-made drivers:
-  [`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m)
-  (shock) and [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m)
-  (no-shock baseline, also defaults to `steps=150` for a matched
-  comparison pair).
+  [`run_ashkelon_shock_step25_150.m`](run_ashkelon_shock_step25_150.m) /
+  [`run_ashkelon_baseline_step25_150.m`](run_ashkelon_baseline_step25_150.m)
+  for Ashkelon, and
+  [`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m) /
+  [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m) for Tiberias
+  (shock / no-shock baseline pairs, matched `steps=150` on both sides).
 - `n_sims=1` (run as its own process) is used for the shock driver,
   mirroring Ashkelon's same caution — that scenario type has an
   unexplained-crash history at `n_sims>=2` in one process for Ashkelon;
@@ -412,15 +426,14 @@ seed instead, for exact reproducibility when that's wanted.
   existing mechanism (treats `inOutRatio` as an annual vacancy-fill rate
   against each SA's empty-housing count — not switched to a real-growth-rate
   approach), but Tiberias's raw values produced far too much population
-  growth: a 200-step (~3.85 year) no-shock baseline grew population
-  17,966 → 31,804 (+77%) vs. the +4.3% expected from real per-SA Tiberias
-  census growth data (`modelthesis/TVR/real_growth_rates.csv`, +1.11%/year
-  city-wide average) — a ~17.7x net-growth overshoot. Applied an empirical
-  scalar correction (`intra_SA(:,5) / 17.7`), Tiberias-only, in the same
-  location as the `intraSAProb` fix above. Re-verification after applying
-  landed at +8.1% (still ~1.9x the +4.3% target, likely single-run
-  stochastic noise from a one-run calibration estimate — left as-is rather
-  than further tuned).
+  growth against real per-SA Tiberias census growth data
+  (`modelthesis/TVR/real_growth_rates.csv`, +1.11%/year city-wide average).
+  Applied via an overridable `tiberias_inoutratio_scale` (default `1.79`,
+  empirically calibrated against `data_for_model_TVR_hotels.mat` — the
+  current, validated Tiberias dataset), dividing `intra_SA(:,5)` by it,
+  Tiberias-only, in the same location as the `intraSAProb` fix above.
+  Re-derive this value (see the calibration comment right above where
+  `tiberias_inoutratio_scale` is set) if the dataset is regenerated again.
 
 ### Data allocation
 
@@ -533,9 +546,10 @@ if that matters for a given run.
   have no hotel shelter capacity.
 - Land-use-submodel and job-creation dynamics don't yet account for hotel
   buildings (usage=7) as a participating building type.
-- Tiberias's `inOutRatio` calibration factor (`/17.7`) was derived from a
-  single no-shock 200-step run and hasn't been re-validated against a shock
-  scenario or a different run length.
+- Tiberias's `inOutRatio` calibration factor (`tiberias_inoutratio_scale`,
+  default `1.79`) was derived from a single no-shock 200-step run and
+  hasn't been re-validated against a shock scenario or a different run
+  length.
 
 ---
 

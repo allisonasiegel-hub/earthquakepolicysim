@@ -16,8 +16,20 @@ against modellab/earthquakeF/*.mat):
     which are WEEKS in this pipeline -- see
     day_to_week_step_rescaling_audit.md; standard_report.py's 30-day
     window doesn't apply, so this defaults to a shorter window)
-  - macro_trends.pdf : same 30 variables, one full-size page each
-  - macro_pngs/<VAR>.png : each variable as its own PNG
+  - macro_trends.pdf : one page per SA_* variable (same 30 as above),
+    preceded by: (1) a shelter & reconstruction outcomes table (from
+    SHELTER_VARS -- reconstruction + per-tier sheltering headcounts) and,
+    for any scenario with a firing shock, (2) total households currently
+    sheltered (any location, cumulative across all three tiers) and (3)
+    cumulative permanent displacement -- see build_total_sheltered_fig/
+    build_permanent_displacement_fig, auto-windowed to the shock-through-
+    settling range
+  - macro_pngs/<VAR>.png : each SA_* variable as its own PNG
+  - shelter_tiers.png / total_sheltered.png / permanent_displacement.png :
+    the same shock-scenario outcome charts as the PDF pages above, as
+    their own standalone PNGs (shelter_tiers.png additionally breaks the
+    total down by tier: immediate/hotel, outside-overflow, temp-dev) --
+    see plot_shelter_timeseries()
   - If more than one scenario label is given, all are overlaid on the same
     axes per variable for direct comparison instead of one plot per label.
 
