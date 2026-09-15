@@ -1,4 +1,16 @@
-function start_spatial_data(floor_hight,file,working_stat,WS)
+function start_spatial_data(floor_hight,file,working_stat,WS,unit_size_scale)
+% unit_size_scale (optional, default 1): multiplies the per-SA synthetic
+% dwelling-unit size distribution (mean and std) before carving each
+% building's floorspace into units. A building's total floorspace is
+% fixed (real survey data); this only changes how many units it gets
+% divided into -- >1 means fewer, larger units per building, which
+% directly controls city-wide vacancy rate (unit count) vs. real household
+% count (fixed, census-driven). Ported from modelthesis's identical fix
+% (data_allocation/start_spatial_dataupdate.m, run_regenerate_tveria_fix.m) -
+% confirmed there that 1.7806 brings vacancy from ~48% down to ~10% for the
+% Tiberias tveria-corrected building file - re-derive this factor for
+% modellab's own household/building counts if they differ enough to matter.
+if nargin<5 || isempty(unit_size_scale); unit_size_scale=1; end
 %% combine assets data with deal data
 %% read data 
 [Assets,~,Assets_p1]=xlsread([file,'assets_B7_Final.csv']);
@@ -100,7 +112,7 @@ for i=1:length(stat)
         ass_data=[stat(i),Mean];
         Problem_st=[Problem_st;stat(i)];
     end
-    sintetic_asset_size=normrnd(ass_data(4),ass_data(5),[size(stat_Build_Data,1)*X,1]);
+    sintetic_asset_size=normrnd(ass_data(4)*unit_size_scale,ass_data(5)*unit_size_scale,[size(stat_Build_Data,1)*X,1]);
     sintetic_asset_size(sintetic_asset_size<30)=[];
     sintetic_asset_price=normrnd(ass_data(2),ass_data(3),[size(stat_Build_Data,1)*X,1]);
     sintetic_asset_price(sintetic_asset_price<(ass_data(2)-ass_data(3)))=mean(sintetic_asset_price);

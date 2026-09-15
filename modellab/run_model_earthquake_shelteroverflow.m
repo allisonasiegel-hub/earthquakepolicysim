@@ -163,7 +163,7 @@ switch city
         % replacing the earlier synthetic testing-only placeholder.
         file=[fileparts(mfilename('fullpath')),'\ASH22\'];
         commute_outside=0.778038196; % validated, in active use
-        alfa=0.3; beta=0.8; lamda=0.95; delta=0.75; % Ashkelon-calibrated, validated
+        alfa=0.3; beta=0.8; lamda=0.45; delta=0.75; % Ashkelon-calibrated, validated (lamda changed from 0.95 to 0.45 2026-09-15, testing)
         % Default matches modellab\ASH22\model parameters3.csv (not the
         % unnumbered model parameters.csv, 0.007790361 - ~4x lower).
         % Overridable so a driver can isolate the parameter-scaling effect
@@ -184,7 +184,14 @@ switch city
         data='data_for_model_TVR_hotels';
         file=[fileparts(mfilename('fullpath')),'\TVR\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         commute_outside=0.246; % matches modelthesis's validated commute_outside_rate (Tiberias zone-99 share)
-        alfa=0.3; beta=0.8; lamda=0.95; delta=0.75; % matches modelthesis's validated wage_alfa/beta/lamda/delta
+        % alfa/beta/lamda/delta (wage-adjustment/income_ratio mechanism):
+        % defaults match modelthesis's validated values. Made overridable
+        % (like city/steps/shock_step) so alternate wage-adjustment
+        % calibrations can be tested without editing this file.
+        if ~exist('alfa','var'); alfa=0.3; end
+        if ~exist('beta','var'); beta=0.8; end
+        if ~exist('lamda','var'); lamda=0.95; end
+        if ~exist('delta','var'); delta=0.75; end
         JobsPerM_comm=0.008932703; % matches modellab\TVR\model parameters.csv
         hotel_room_density=0.02128; % rooms per sqm floor-adjusted area - see identify_hotels_TVR.m
     case 'Jerusalem'
@@ -243,20 +250,29 @@ if strcmp(city,'Tiberias')
     clearvars raw_sas_tvr raw_intraSA raw_intraYeshuv
     % CALIBRATION (Tiberias only): migration_19.m uses inOutRatio
     % (col 5) directly as an annual in-migration rate against each SA's
-    % vacant-housing count - the data source/mechanism itself is kept
-    % as-is (not switched to modelthesis's real_growth_rate approach),
-    % but the raw values produce far too much growth for Tiberias: a
-    % 200-step (~3.85 year) no-shock baseline grew population 17,966 ->
-    % 31,804 (+77%), vs. the +4.3% expected from real per-SA Tiberias
-    % census growth rates (modelthesis/TVR/real_growth_rates.csv,
-    % +1.11%/year city-wide average, compounded over the same span) -
-    % net growth overshoot of ~17.7x ((31804-17966)/(18747-17966), where
-    % 18747 = 17966*(1.0111)^3.85). Empirical scalar correction derived
-    % from that single comparison (not a unit/derivation fix like the
-    % intraSAProb one above - re-validate if steps/shock_step change
-    % substantially, since this hasn't been checked against a shock
-    % scenario or a different run length).
-    intra_SA(:,5) = intra_SA(:,5) / 17.7;
+    % vacant-housing count (free_assets) - the data source/mechanism
+    % itself is kept as-is (not switched to modelthesis's
+    % real_growth_rate approach). The /17.7 factor below was derived
+    % against the PRE-density-fix dataset (34,162 assets, ~47% vacant,
+    % free_assets~=16,196) - a 200-step no-shock baseline grew population
+    % 17,966 -> 31,804 (+77%) vs. the +4.3% expected from real per-SA
+    % Tiberias census growth rates (modelthesis/TVR/real_growth_rates.csv,
+    % +1.11%/year city-wide, compounded over ~3.85 years) - ~17.7x
+    % overshoot. NEEDS RE-CALIBRATION after the housing-density fix
+    % (see data_allocation/run_regenerate_tveria_fix.m): free_assets
+    % dropped ~8x (to ~1,979 at 10% vacancy), and this mechanism scales
+    % ~linearly with free_assets, so /17.7 badly under-shot growth on the
+    % new dataset. RE-CALIBRATED (2026-09-15) against the post-density-fix
+    % dataset: a 200-step no-shock baseline with no correction
+    % (tiberias_inoutratio_scale=1) grew population 17,450 -> 18,808
+    % (+7.78%) vs. the +4.35% expected (17,450*(1.0111)^3.85=18,209) -
+    % only a ~1.79x overshoot now (raw net growth 1358 / expected net
+    % growth 759), much smaller than the original ~17.7x since the
+    % density fix already removed most of the excess free_assets "fuel"
+    % this mechanism scales with. Overridable so the correction can be
+    % re-derived again if the dataset changes further.
+    if ~exist('tiberias_inoutratio_scale','var'); tiberias_inoutratio_scale=1.79; end
+    intra_SA(:,5) = intra_SA(:,5) / tiberias_inoutratio_scale;
 end
 unique_stat=unique(Build_Data(:,4));
 intra_SA=intra_SA(ismember(intra_SA(:,1),unique_stat),:);
@@ -314,13 +330,24 @@ if ~exist('lu_change_rank_upper','var'); lu_change_rank_upper=40; end % upper bo
 % day_to_week_step_rescaling_audit.md.
 RECOVERY = 1 - (1-0.3135)^(1/52);
 %% Polocies
-% Subsidy logic matches run_model_eq.m (flat amount via HH_subsidy.m) -
-% NOT the elderly-thesis percentage/elderly-premium version
-% (HH_subsidy_pct.m, subsidy_pct, w_subsidy_eld). Not elderly-specific,
-% so it belongs in this project.
-subsidy_businesses=0; % help business during
-subsidy_residents=0; % toggle: 0=off (baseline), 1=on
-subsidy_amount=1000;
+% Subsidy logic: targeted variants via HH_subsidy_targeted.m /
+% cal_bui_sa_subsidy_targeted.m (NOT the shared flat-amount HH_subsidy.m /
+% cal_bui_sa_subsidy.m that run_model_eq.m and run_model_earthquake.m
+% still use unmodified, and NOT the elderly-thesis percentage/elderly-
+% premium version - HH_subsidy_pct.m, subsidy_pct, w_subsidy_eld. Not
+% elderly-specific, so it belongs in this project).
+%
+% subsidy_residents_mode: 0=off, 1=displaced households only, 2=displaced
+% + lowest 2 income deciles (one-time, shock-triggered for both groups -
+% see HH_subsidy_targeted.m). Every recipient in either mode gets their
+% own housing cost (Assets/bad_Assets col 13 "cost of life"), not a flat
+% amount - see that function's header comment.
+if ~exist('subsidy_residents_mode','var'); subsidy_residents_mode=0; end
+% subsidy_businesses_mode: 0=off, 1=destroyed commercial buildings only
+% (the original cal_bui_sa_subsidy.m behavior), 2=destroyed commercial
+% buildings UNION the smallest 30% of commercial buildings by current
+% worker headcount - see cal_bui_sa_subsidy_targeted.m.
+if ~exist('subsidy_businesses_mode','var'); subsidy_businesses_mode=0; end
 subsidy_duration=9; % was 60 days (~2 months) -> ~9 weeks
 priority_recovery=0; % faster recovery of residential
 recovery_factor=2.5;
@@ -369,14 +396,16 @@ if ~exist('outside_patience_duration','var'); outside_patience_duration=4; end
 % tempdev_patience_duration: same permanent-departure mechanic as
 % outside_patience_duration, but for households in Temp_Dev_Assign
 % (Temp_Dev_Assign col(3) is each household's own entry step - see its
-% init comment). Defaults to Inf (no per-household patience limit -
-% matches the script's original "no duration cap" temp-dev behavior,
-% where only the SITE-level temp_dev_duration force-close/transfer-to-
-% overflow applies). Set both this AND temp_dev_duration=Inf together to
-% fully replace the site-closure/transfer mechanic with a clean
-% per-household "N steps in temp-dev or permanently displaced" rule
-% instead - an explicit test scenario, not the current default behavior.
-if ~exist('tempdev_patience_duration','var'); tempdev_patience_duration=Inf; end
+% init comment). Ported from Ashkelon's calibration (outside=4,
+% tempdev=8 weeks) - previously defaulted to Inf (no per-household
+% patience limit, matching the script's original "no duration cap"
+% temp-dev behavior where only the SITE-level temp_dev_duration
+% force-close/transfer-to-overflow applies). With this set, temp-dev
+% households can now also permanently depart via patience, same as the
+% outside-overflow and land-use-eviction pools - previously only those
+% two (small) pools could ever produce a permanently-displaced
+% household, since immediate shelter and temp-dev had no cap at all.
+if ~exist('tempdev_patience_duration','var'); tempdev_patience_duration=8; end
 % Medium-term sheltering ("temporary developments" - tent city/container
 % site/etc., per shelter_policy_extensions notes): a fixed number of
 % abstract residential SPACES, not individual buildings - no Build_Data
@@ -436,11 +465,11 @@ res_undamaged_prob=0.0;
 
 %% filename by policy
 policy_tags = {};
-if subsidy_residents
-    policy_tags{end+1} = 'R';
+if subsidy_residents_mode > 0
+    policy_tags{end+1} = sprintf('R%d', subsidy_residents_mode);
 end
-if subsidy_businesses
-    policy_tags{end+1} = 'B';
+if subsidy_businesses_mode > 0
+    policy_tags{end+1} = sprintf('B%d', subsidy_businesses_mode);
 end
 if priority_recovery
     policy_tags{end+1} = 'P';
@@ -694,7 +723,7 @@ for i=1:steps
     lost_jobs_B_ID =[];
 
     %% building movement - recovery, assets and work places
-    if shock==1
+    if shock==1 && i >= shock_step + temp_dev_delay
         % Probabilistic per-building weekly recovery (replaces the old
         % deterministic shared-countdown mechanism, where every destroyed
         % building recovered at exactly the same step count regardless of
@@ -704,6 +733,11 @@ for i=1:steps
         % "progress" - destroyed_B(:,2) is no longer used, kept as a
         % vestigial column since destroyed_B(:,3) [size] is still read
         % elsewhere, e.g. site_temp_dev_locations.m).
+        %
+        % Gated on i >= shock_step+temp_dev_delay (not just shock==1):
+        % reconstruction crews need the same stand-up time as temp-dev
+        % sites, so rebuilding starts at the same moment temp-dev opens,
+        % not immediately at the shock itself.
         recovery_prob=RECOVERY*ones(size(destroyed_B,1),1);
         if priority_recovery==1
             [~, idx_in_build]=ismember(destroyed_B(:,1),Build_Data(:,1));
@@ -1052,7 +1086,7 @@ for i=1:steps
         end
     end
 
-    [HH_data,Individuals_data,HH_track]=HH_subsidy(HH_data,Individuals_data,HH_destroyed,HH_track,subsidy_residents,subsidy_amount,subsidy_duration,i);
+    [HH_data,Individuals_data,HH_track]=HH_subsidy_targeted(HH_data,Individuals_data,HH_destroyed,HH_track,Assets,bad_Assets,subsidy_residents_mode,subsidy_duration,i);
 
     % HH still waiting in shelter after this step's releases/new
     % assignments above - these retry the within-SA search every step
@@ -1203,7 +1237,7 @@ for i=1:steps
                 
         %% mean salary for all buildings withe workers comm only!!!
         %building_average_salary=cal_bui_sa(Work_places,Build_Data); % building sum salary
-        building_average_salary=cal_bui_sa_subsidy(Work_places, Build_Data, destroyed_B, subsidy_businesses); % building sum salary
+        building_average_salary=cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, subsidy_businesses_mode); % building sum salary
         P=[0,prctile(building_average_salary(:,2),1:100)]; % salary by precentiles
         % Vectorized - same reasoning as the MVB30 ranking above.
         rank_col = sum(building_average_salary(:,2) >= P(1:100), 2);
@@ -1832,9 +1866,10 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             SA_FIFTH SA_SIXTH SA_SEVENTH SA_EIGHTH SA_NINTH SA_TENTH SA_AREA...
             steps city run_timestamp shock_step...
             jobs_per_meter_multiplier potential_jobs_per_meter_multiplier lu_change_rank_lower lu_change_rank_upper JobsPerM_comm...
+            alfa beta lamda delta...
             displaced_shelter agents_per_sqm public_bldg_usable_fraction restrict_public_shelters_to_schools...
             hotel_room_density agents_per_room Shelters Shelter_Assign...
-            subsidy_residents subsidy_businesses subsidy_amount subsidy_duration HH_track...
+            subsidy_residents_mode subsidy_businesses_mode subsidy_duration HH_track...
             outside_commute_penalty_pct outside_patience_duration tempdev_patience_duration Sheltered_Outside LU_Displaced temp_dev_delay temp_dev_duration...
             n_temp_dev_sites temp_dev_capacity_frac temp_dev_site_coords Temp_Dev_Sites Temp_Dev_Assign...
             sumdata destroyed_B RECOVERY bad_Assets...

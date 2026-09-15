@@ -25,4 +25,11 @@ potential_jobs_per_meter_multiplier = 2;   % modelthesis: lu_potential_jobs_per_
 lu_change_rank_lower = 45;                 % modelthesis: lu_change_rank_lower
 lu_change_rank_upper = 85;                 % modelthesis: lu_change_rank_upper
 
+% steps=150: matches Ashkelon's current standard run length
+% (run_ashkelon_baseline_step25_150.m/run_ashkelon_shock_step25_150.m,
+% 2026-09-15). No shock_step set here - stays a no-shock baseline by
+% default (shock_step falls back to the script's own 900 default). For
+% the shock scenario, use run_tiberias_shock_step25_150.m instead.
+if ~exist('steps','var'); steps=150; end
+
 run('run_model_earthquake_shelteroverflow.m')

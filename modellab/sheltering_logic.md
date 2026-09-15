@@ -125,7 +125,18 @@ still_sheltered_hh   = households currently in Shelter_Assign      (tier 1)
 still_temp_dev_hh    = households currently in Temp_Dev_Assign     (tier 3)
 moving_HH = [normal movers; HH_destroyed; still_sheltered_hh; Sheltered_Outside(:,1); still_temp_dev_hh]
 ```
-All sheltered households (any tier) are folded into the same `moving_HH` pool and retried through the normal `find_new_house_same_stat` → `find_new_house_yeshuv` cascade every step, exactly like migrants searching for a new home. If a household in any tier fails to find housing this step, it's exempted from `did_not_find_house` deletion (`exempt_sheltered`) and simply retries again next step — **except** a tier-2 (out-of-city) household whose patience has run out (see `outside_patience_duration` above), which loses its exemption and is deleted like any other migrant who's given up. Tiers 1 and 3 have no such cutoff — households there are never deleted from the simulation.
+All sheltered households (any tier) are folded into the same `moving_HH` pool and retried through the normal `find_new_house_same_stat` → `find_new_house_yeshuv` cascade every step, exactly like migrants searching for a new home. If a household in any tier fails to find housing this step, it's exempted from `did_not_find_house` deletion (`exempt_sheltered`) and simply retries again next step — **except** once its own patience runs out (see below), where it loses that exemption and is deleted like any other migrant who's given up. **Tier 1 (immediate shelter) has no patience cutoff of its own** — households there are never deleted from the simulation, unlike tiers 2 and 3.
+
+### Decreasing patience → permanent departure
+
+- **Tier 2 (out-of-city overflow) and `LU_Displaced`** (households evicted by a land-use conversion of their home, tracked the same way): governed by `outside_patience_duration` (default 4 weeks). Elapsed time is measured from whichever is later — the household's own entry, or the point at which search actually starts (see "stage 1/2" note below) — since nothing searches during stage 1 regardless of nominal entry time.
+- **Tier 3 (temp-dev)**: governed by `tempdev_patience_duration` (default 8 weeks, using each household's own `Temp_Dev_Assign` entry step). This is a *per-household* mechanic, independent of the *site-level* `temp_dev_duration` force-close/transfer-to-overflow described above — both can be active at once, or `temp_dev_duration=Inf` can disable the site-level mechanic entirely so tier-3 exits happen only via patience (this is Ashkelon's/Tiberias's current validated shock-scenario configuration — see the main README's "Validated shock scenario configuration").
+- Recovering the original home or securing a new asset always takes priority over any patience clock — departure only ever catches households still genuinely unresolved once time runs out.
+- Tracked in `n_permanently_displaced_total`/`n_permanently_displaced_track` — the only channel through which shock-caused population loss doesn't eventually recover.
+
+### Two-stage search design
+
+**Stage 1** (from the shock until temp-dev opens, `i < shock_step + temp_dev_delay`): no displaced household searches for new housing at all — none of tiers 1/2/3 are folded into `moving_HH`. Reconstruction proceeds regardless. **Stage 2** begins once temp-dev opens; from then on every displaced household searches every step like any other mover.
 
 ---
 

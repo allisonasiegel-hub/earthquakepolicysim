@@ -17,7 +17,11 @@ Tiberias, and Jerusalem all now have calibrated `commute_outside`/
 best-available data-driven placeholder, not independently cross-validated
 the way Ashkelon/Tiberias's are — see the city configuration block's own
 comment). Ready-made per-city driver scripts exist for the validated
-calibrations: [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m),
+calibrations: [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m)
+(no-shock baseline, `steps=150`),
+[`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m)
+(shock scenario, aligned to Ashkelon's current setup — see "Validated
+shock scenario configuration" below),
 [`run_jerusalem_calibrated.m`](run_jerusalem_calibrated.m).
 
 `run_model_earthquake.m` is an earlier, simpler variant without the
@@ -201,11 +205,16 @@ to find housing:
   the household's own entry into the pool, or stage-2 onset — since stage 1
   has no search attempts at all, the patience clock can't start before
   stage 2 regardless of nominal entry time.
-- **`tempdev_patience_duration`** (default `Inf` — no per-household cap,
-  preserving the original site-level-only closure behavior) — same
-  mechanic, for households in `Temp_Dev_Assign`. Set together with
-  `temp_dev_duration=Inf` to replace the site-closure/transfer mechanic
-  entirely with a clean "N steps in temp-dev or permanently displaced" rule.
+- **`tempdev_patience_duration`** (default 8 weeks, ported from Ashkelon's
+  calibration — was `Inf`/no per-household cap) — same mechanic, for
+  households in `Temp_Dev_Assign`. Before this was set, only the small
+  out-of-city-overflow and land-use-eviction pools could ever produce a
+  permanently-displaced household — immediate shelter and temp-dev (the
+  two largest pools) had no cap at all, so a household there would retry
+  indefinitely regardless of how long housing search took. Set together
+  with `temp_dev_duration=Inf` to replace the site-closure/transfer
+  mechanic entirely with a clean "N steps in temp-dev or permanently
+  displaced" rule.
 - Recovering the original home or securing a new asset always takes
   priority and releases a household from these pools first — patience-based
   departure only ever catches households still genuinely unresolved once
@@ -256,6 +265,37 @@ reproduce the script's original, unmultiplied behavior exactly if a caller
 doesn't override them. modelthesis's validated Tiberias calibration
 (`3`/`2`/`45`/`85`) is set by
 [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m).
+
+### Validated shock scenario configuration
+
+The standard shock-scenario setup (`shock_step`, `steps`, and whether
+`temp_dev_duration`'s site-closure mechanic runs alongside patience-based
+departure) was originally validated empirically for Ashkelon, then
+independently re-checked and ported to Tiberias (2026-09-15):
+
+- **`shock_step=25`, `steps=150`** — `shock_step` needs to clear the
+  land-use module's initial-activation transient (a one-time large
+  conversion batch when land-use first turns on) before the shock hits,
+  or the two effects confound each other. Checked per-city via a
+  no-shock baseline's `SA_SERVICE` (commercial building count)
+  trajectory: Ashkelon settles by ~week 20-21; **Tiberias settles by
+  week 8** (`SA_SERVICE` flat from step 8 through step 200 in a 200-step
+  no-shock baseline) — `shock_step=25` clears Tiberias's transient with
+  an even larger margin than it does for Ashkelon's.
+- **`temp_dev_duration=Inf`** — disables the site-level force-close/
+  transfer-to-overflow mechanic, so temp-dev departures happen only via
+  `tempdev_patience_duration` (per-household patience) instead of two
+  competing exit mechanisms. See "Decreasing patience" above.
+- Ready-made drivers:
+  [`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m)
+  (shock) and [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m)
+  (no-shock baseline, also defaults to `steps=150` for a matched
+  comparison pair).
+- `n_sims=1` (run as its own process) is used for the shock driver,
+  mirroring Ashkelon's same caution — that scenario type has an
+  unexplained-crash history at `n_sims>=2` in one process for Ashkelon;
+  untested whether Tiberias shares it at this exact parameter
+  combination, so treated the same way defensively.
 
 ### Reproducibility: RNG seeding
 
@@ -449,8 +489,15 @@ sensitivity testing): `agents_per_room`, `public_bldg_usable_fraction`,
 a single empirical comparison against Ashkelon's shock+hotels scenario (56
 permanent departures out of a ~471 peak overflow at 4 steps, vs. just 1 at
 the previous default of 13) — re-validate if `steps`/`shock_step` change
-substantially, and note it hasn't been checked against Tiberias's shock
-scenario at all. `tempdev_patience_duration` defaults to `Inf` (off).
+substantially. `tempdev_patience_duration` (default 8 weeks) is the same
+Ashkelon-calibrated pair as `outside_patience_duration=4` — both ported
+into Tiberias's shock scenario 2026-09-15. Both are the values Ashkelon
+uses, applied to Tiberias without independent Tiberias-specific
+sensitivity testing of the durations themselves (only the surrounding
+`shock_step`/`steps`/`temp_dev_duration` configuration was independently
+re-verified for Tiberias — see "Validated shock scenario configuration"
+above); permanent-displacement counts are sensitive to these, so revisit
+if that matters for a given run.
 
 **Temporal-resolution gaps identified but not resolved:**
 - **Job search** — confirmed structural issue. Each job-seeker gets exactly

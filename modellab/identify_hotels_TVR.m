@@ -62,7 +62,7 @@ NEW_SCHOOL_USAGE = 8;
 
 %% 1. Confirmed hotels from raw source data
 raw = readtable(raw_file);
-confirmed_ids = raw.BLDG_ID_x(raw.Usage == HOTEL_USG_CODE);
+confirmed_ids = raw.BLDG_ID(raw.Usage == HOTEL_USG_CODE);
 fprintf('Raw source: %d buildings tagged Usage=%d (hotel)\n', length(confirmed_ids), HOTEL_USG_CODE);
 
 %% 2. Load model data, verify confirmed hotels survive
@@ -118,7 +118,7 @@ fprintf('Estimated total rooms across all %d tagged hotels: %.0f (real: %d)\n', 
     length(all_hotel_ids), est_total_rooms, TOTAL_REAL_ROOMS);
 
 %% 8. Identify and tag school buildings as usage=8
-school_ids = raw.BLDG_ID_x(ismember(raw.Usage, SCHOOL_USG_CODES));
+school_ids = raw.BLDG_ID(ismember(raw.Usage, SCHOOL_USG_CODES));
 school_present = ismember(school_ids, Build_Data(:,1));
 if ~all(school_present)
     warning('%d of %d school IDs are missing from Build_Data - excluding them.', ...
