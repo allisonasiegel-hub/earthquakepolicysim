@@ -210,10 +210,28 @@ switch city
         JobsPerM_comm=0.0440838; % matches modellab\JER\model parameters.csv
         hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     case 'Arad'
-        data='data_for_model_Arad'; % TODO: no data_for_model_Arad.mat in modellab yet - run the data_allocation pipeline or copy it in
+        % data_for_model_Arad - generated via data_allocation/run_generate_arad.m
+        % (Arad/ raw data had never been ported before; see that script's
+        % header for the unit_size_scale=1.256 vacancy calibration, ~7%
+        % vacancy). No hotel-tagged variant exists yet, plain dataset,
+        % hotel_room_density=0.
+        data='data_for_model_Arad';
         file=[fileparts(mfilename('fullpath')),'\Arad\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
-        commute_outside=NaN; % TODO
-        alfa=NaN; beta=NaN; lamda=NaN; delta=NaN; % TODO
+        % commute_outside: zone-99 share read directly from Arad\commuting.xlsx
+        % (settlement 2560 = Arad's real CBS code, row2/col5=0.34) - same
+        % cell-reading convention used for Jerusalem/Beer Sheva. Cross-checked
+        % against Arad\sa_data_b7.csv's own per-SA comm99 column: population-
+        % weighted average across all 6 SAs = 0.338, matching closely -
+        % trustworthy for this city's file.
+        commute_outside=0.34;
+        % alfa/beta/lamda/delta: no prior modellab/modelthesis calibration
+        % exists for Arad. Overridable (like Tiberias/Beer Sheva) so a driver
+        % can set them explicitly; defaults below are this baseline run's
+        % requested values, not a validated calibration.
+        if ~exist('alfa','var'); alfa=0.30; end
+        if ~exist('beta','var'); beta=0.95; end
+        if ~exist('lamda','var'); lamda=0.95; end
+        if ~exist('delta','var'); delta=0.50; end
         JobsPerM_comm=0.03400486; % matches modellab\Arad\model parameters.csv
         hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     otherwise
@@ -273,6 +291,34 @@ if strcmp(city,'Tiberias')
     % re-derived again if the dataset changes further.
     if ~exist('tiberias_inoutratio_scale','var'); tiberias_inoutratio_scale=1.79; end
     intra_SA(:,5) = intra_SA(:,5) / tiberias_inoutratio_scale;
+end
+% BUG FIX (Arad only): same "daily probability" misinterpretation as
+% Tiberias above - Arad's sas_national.xlsx raw intraSAProb/intraYeshuvProb
+% (median 0.0237/0.0562) are essentially identical in magnitude to
+% Tiberias's known-buggy values (median 0.0256), both sourced from the
+% same shared national table and both ~700x larger than Ashkelon's
+% confirmed-correct value (0.0000336) - NOT an Arad-specific data anomaly,
+% the same systemic issue. Left uncorrected, who_is_moving.m's
+% 1-(1-p)^7 daily->weekly conversion (read_sas_data.m) produces a 13-22%
+% weekly move probability per SA - "10-48% of the population attempting a
+% move every single week" was exactly the failure mode already diagnosed
+% for Tiberias (~85% population collapse over 30 steps, timed with
+% land-use activation - see the BUG FIX comment above). Confirmed via
+% modellab diagnostics 2026-09-18: an Arad no-shock baseline still lost
+% ~49% of its population in the first ~40 weeks even with ALL building-
+% stock loss mechanisms (find_empty_buildings_arad.m, Change_LU) disabled
+% entirely and housing prices falling (not scarce) throughout - ruling out
+% supply/affordability and pointing at excess churn overwhelming the
+% one-attempt-per-step housing search cascade instead. Same fix as
+% Tiberias: reinterpret the raw values as ANNUAL rates, which brings the
+% weekly probability down to a plausible ~0.04-0.07%.
+if strcmp(city,'Arad')
+    [~,~,raw_sas_arad]=xlsread([file,'sas_national.xlsx']);
+    raw_intraSA = cell2mat(raw_sas_arad(2:end,11));
+    raw_intraYeshuv = cell2mat(raw_sas_arad(2:end,12));
+    intra_SA(:,2) = 1-(1-raw_intraSA).^(7/365);
+    intra_SA(:,3) = 1-(1-raw_intraYeshuv).^(7/365);
+    clearvars raw_sas_arad raw_intraSA raw_intraYeshuv
 end
 unique_stat=unique(Build_Data(:,4));
 intra_SA=intra_SA(ismember(intra_SA(:,1),unique_stat),:);
@@ -523,7 +569,15 @@ Build_Distance_matrix_400=building_within_D(Build_Data,400);
 pd = makedist('Normal'); % normal distribution ; used for simulation of HH moving
 %% prepearing the world:
 % sign empty buildings
-[Build_Data,Build_Data_p]=find_empty_buildings(Assets,Build_Data,Build_Data_p);
+% Arad uses a patched variant (find_empty_buildings_arad.m) that exempts
+% small (<=2 unit) buildings from permanent reclassification - see that
+% file's header for why. Every other city keeps the original, unmodified
+% behavior.
+if strcmp(city,'Arad')
+    [Build_Data,Build_Data_p]=find_empty_buildings_arad(Assets,Build_Data,Build_Data_p);
+else
+    [Build_Data,Build_Data_p]=find_empty_buildings(Assets,Build_Data,Build_Data_p);
+end
 
 %% building service ratio -
 % this function calculate the service ratio for each building
@@ -1644,8 +1698,13 @@ for i=1:steps
     end
 
     %% check empty buildings ;
-    [Build_Data,Build_Data_p]=find_empty_buildings(Assets,Build_Data,Build_Data_p); 
-    
+    % Arad uses the patched variant - see the init call above for why.
+    if strcmp(city,'Arad')
+        [Build_Data,Build_Data_p]=find_empty_buildings_arad(Assets,Build_Data,Build_Data_p);
+    else
+        [Build_Data,Build_Data_p]=find_empty_buildings(Assets,Build_Data,Build_Data_p);
+    end
+
     %% sas move:
     % calculate building service ratio
     [Build_Data]=building_service_ratio(Build_Data,Build_Data_p,Build_Distance_matrix_400);
