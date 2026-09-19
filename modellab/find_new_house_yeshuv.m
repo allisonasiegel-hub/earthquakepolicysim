@@ -1,6 +1,6 @@
 function [HH_ID,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data]...
     =find_new_house_yeshuv(HH_ID,pd,HH_data,Individuals_data,Build_Data...
-    ,Build_Distance_matrix_400,Assets,wresd,FFF1,LU,new_A,new_B,HH_change,bad_Assets)
+    ,Build_Distance_matrix_400,Assets,wresd,FFF1,LU,new_A,new_B,HH_change)
 
 % Similar to find_new_house_same_stat without same SA condition
 
@@ -15,19 +15,8 @@ for j=1:size(FFF1,1)
     Yeshuv=HH_data(FFF,9);% yeshuv
     IX=1;
 
-    % see find_new_house_same_stat.m for the full explanation - previous
-    % asset's cost only ever raises the affordability ceiling, never
-    % lowers it
-    prev_cost = 0;
-    if ~isempty(bad_Assets)
-        prev_row = find(bad_Assets(:,3)==HH_data(FFF,11), 1);
-        if ~isempty(prev_row)
-            prev_cost = bad_Assets(prev_row,13);
-        end
-    end
-
-    possible_assets_Y=Assets(Assets(:,1)~=SA & Assets(:,6)==Yeshuv & Assets(:,11)==0 & Assets(:,13)<=max(IX*income,prev_cost),:);
-    possible_assets_O=Assets(Assets(:,1)~=SA & Assets(:,6)~=Yeshuv & Assets(:,11)==0 & Assets(:,13)<=max(IX*income,prev_cost),:);
+    possible_assets_Y=Assets(Assets(:,1)~=SA & Assets(:,6)==Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:);
+    possible_assets_O=Assets(Assets(:,1)~=SA & Assets(:,6)~=Yeshuv & Assets(:,11)==0 & Assets(:,13)<=IX*income,:);
 
     % Only assets in buildings still zoned residential are habitable - see
     % find_new_house_same_stat.m for the full explanation.

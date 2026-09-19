@@ -234,6 +234,31 @@ switch city
         if ~exist('delta','var'); delta=0.50; end
         JobsPerM_comm=0.03400486; % matches modellab\Arad\model parameters.csv
         hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
+    case 'Beer Sheva'
+        % data_for_model_BS08 - generated via data_allocation/run_generate_beersheva.m
+        % (BS08/ raw data had never been ported before; see that script's
+        % header for the census-units fix and the unit_size_scale=1.58
+        % vacancy calibration, ~7% vacancy). No hotel-tagged variant exists
+        % yet (unlike Ashkelon/Tiberias) - plain dataset, hotel_room_density=0.
+        data='data_for_model_BS08';
+        file=[fileparts(mfilename('fullpath')),'\BS08\'];
+        % commute_outside: zone-99 share read directly from BS08\commuting.xlsx
+        % (settlement 9000 = Beer Sheva's real CBS code, row30/col5=0.519454) -
+        % same cell-reading convention used for Jerusalem; matches BS08\
+        % sa_data_B7.csv's own comm99 column for SA 90000111 (0.519454138),
+        % so trustworthy for this city's file. Not independently cross-
+        % validated the way Ashkelon/Tiberias's values are.
+        commute_outside=0.519454;
+        % alfa/beta/lamda/delta: no prior modellab/modelthesis calibration
+        % exists for Beer Sheva. Overridable (like Tiberias) so a driver can
+        % set them explicitly; defaults below are this baseline run's
+        % requested values, not a validated calibration.
+        if ~exist('alfa','var'); alfa=0.40; end
+        if ~exist('beta','var'); beta=0.60; end
+        if ~exist('lamda','var'); lamda=0.25; end
+        if ~exist('delta','var'); delta=0.80; end
+        JobsPerM_comm=0.013952158; % matches modellab\BS08\model parameters.csv
+        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     otherwise
         error('Unknown city "%s" - add a case for it to the city configuration block.', city);
 end
@@ -244,6 +269,19 @@ end
 
 data2 = split(data, '_');
 load(data);
+% resSearchLen retry mechanism (ported from
+% modelthesis/run_model_earthquake.m): col 13 tracks each HH's consecutive
+% failed housing-search attempts. did_not_find_house.m deletes a household
+% immediately with zero retry tolerance - modelthesis identified this as
+% the cause of a ~85% population collapse over 30 steps, timed with
+% land-use activation (conversions shrink the residential stock, ordinary
+% movers' searches start failing, and with no retry budget every one of
+% them was deleted on the very first miss). col 13 is a fresh append -
+% HH_data has no existing col 13+ usage in this script. Land-use-evicted
+% households are NOT part of this mechanism - they already get their own
+% separate multi-step grace period via LU_Displaced/outside_patience_duration
+% further below, a mechanism modelthesis doesn't have.
+HH_data(:,13)=0;
 [sas_data,intra_SA,intra_P]=read_sas_data(file,'sas_national.xlsx'); %SA data
 % BUG FIX (Tiberias only): read_sas_data.m treats intraSAProb/
 % intraYeshuvProb (raw xlsx cols 11-12) as DAILY probabilities and
@@ -343,6 +381,12 @@ comm_policy=0;
 min_sal = 5000; % min salary according to BTL in 2017
 sims=30;
 if ~exist('steps','var'); steps=200; end % allow a sweep driver to pre-set this for faster test runs
+% resSearchLen: max consecutive failed housing-search attempts before a HH
+% actually leaves the city (see HH_data col 13, set at load time above).
+% Ported from modelthesis/run_model_earthquake.m - default scales with run
+% length the same way it does there (14 fails tolerated over a 760-step
+% run). Overridable so a driver/sweep can test a different retry budget.
+if ~exist('resSearchLen','var'); resSearchLen=max(1,round(steps*14/760)); end
 % earthquake severity comes from the per-SA damage
 % table passed to earth_quake() instead, see the shock block below)
 shock=0;
@@ -383,11 +427,13 @@ RECOVERY = 1 - (1-0.3135)^(1/52);
 % premium version - HH_subsidy_pct.m, subsidy_pct, w_subsidy_eld. Not
 % elderly-specific, so it belongs in this project).
 %
-% subsidy_residents_mode: 0=off, 1=displaced households only, 2=displaced
-% + lowest 2 income deciles (one-time, shock-triggered for both groups -
-% see HH_subsidy_targeted.m). Every recipient in either mode gets their
-% own housing cost (Assets/bad_Assets col 13 "cost of life"), not a flat
-% amount - see that function's header comment.
+% subsidy_residents_mode: 0=off, 5=displaced households only, decile-
+% tiered % of housing cost (decile 7-10: 30%, 4-6: 35%, 1-3: 40%), fixed
+% 4-step duration regardless of subsidy_duration, 6=displaced households
+% only, decile-tiered % of housing cost (decile 7-10: 10%, 4-6: 15%,
+% 1-3: 20%), fixed 8-step duration regardless of subsidy_duration. (Modes
+% 1-4 were early, since-superseded designs, removed 2026-09-18.) See
+% HH_subsidy_targeted.m's header for the full writeup.
 if ~exist('subsidy_residents_mode','var'); subsidy_residents_mode=0; end
 % subsidy_businesses_mode: 0=off, 1=destroyed commercial buildings only
 % (the original cal_bui_sa_subsidy.m behavior), 2=destroyed commercial
@@ -443,14 +489,11 @@ if ~exist('outside_patience_duration','var'); outside_patience_duration=4; end
 % outside_patience_duration, but for households in Temp_Dev_Assign
 % (Temp_Dev_Assign col(3) is each household's own entry step - see its
 % init comment). Ported from Ashkelon's calibration (outside=4,
-% tempdev=8 weeks) - previously defaulted to Inf (no per-household
-% patience limit, matching the script's original "no duration cap"
-% temp-dev behavior where only the SITE-level temp_dev_duration
-% force-close/transfer-to-overflow applies). With this set, temp-dev
-% households can now also permanently depart via patience, same as the
-% outside-overflow and land-use-eviction pools - previously only those
-% two (small) pools could ever produce a permanently-displaced
-% household, since immediate shelter and temp-dev had no cap at all.
+% tempdev=8 weeks). With this set, temp-dev households can now also
+% permanently depart via patience, same as the outside-overflow and
+% land-use-eviction pools - previously only those two (small) pools
+% could ever produce a permanently-displaced household, since immediate
+% shelter and temp-dev had no cap at all.
 if ~exist('tempdev_patience_duration','var'); tempdev_patience_duration=8; end
 % Medium-term sheltering ("temporary developments" - tent city/container
 % site/etc., per shelter_policy_extensions notes): a fixed number of
@@ -485,20 +528,6 @@ if ~exist('temp_dev_capacity_frac','var'); temp_dev_capacity_frac=0.75; end
 % the top-damaged SAs, purely as a real-world location reference (no
 % building or distance-matrix row is created from it).
 temp_dev_site_coords=[];
-% temp_dev_duration: steps a temp-dev space stays open once it spawns,
-% per the "exist for a defined period of time" requirement. Once elapsed,
-% any remaining residents are force-released into the out-of-city
-% overflow pool (Sheltered_Outside) - same mechanics as the existing
-% capacity-exhaustion overflow path - and the sites' bookkeeping is
-% closed out; nothing is left behind (no Build_Data row existed to begin
-% with). Placeholder value (~6 months) - not yet set through sensitivity
-% testing. Overridable (like city/steps/shock_step) so a caller can define
-% a "sites never close" scenario: set temp_dev_duration=Inf - the closure
-% trigger below is `i >= shock_step + temp_dev_delay + temp_dev_duration`,
-% and no finite step i is ever >= Inf, so it simply never fires. (0 would
-% NOT achieve "never closes" - it'd make the trigger true the very step
-% the sites open, closing them immediately.)
-if ~exist('temp_dev_duration','var'); temp_dev_duration=26; end % was 180 days (~6 months) -> ~26 weeks
 commercial_preservation=0;
 residential_preservation=0;
 
@@ -740,7 +769,6 @@ Outside_Activity_Backup=zeros(0,2); % [agent_id, original_number_of_activities] 
 Temp_Dev_Sites=zeros(0,6); % [site_id, X, Y, capacity, start_step, end_step] - medium-term sheltering spaces (never a Build_Data row - see site_temp_dev_locations.m)
 Temp_Dev_Assign=zeros(0,3); % [agent_id, site_id, start_step] - start_step added for tempdev_patience_duration (per-household patience, parallel to Sheltered_Outside col(2)) - see that parameter's own comment
 temp_dev_spawned=false; % one-time flag: sites open at shock_step+temp_dev_delay
-temp_dev_closed=false; % one-time flag: sites close at shock_step+temp_dev_delay+temp_dev_duration
 
 % --- outcome tracking: reconstruction + per-tier sheltering headcounts ---
 % n_destroyed_total: snapshotted once at the moment of shock (see the
@@ -758,6 +786,16 @@ n_destroyed_total=0;
 % processed (== the true end-of-sim value, since every step overwrites it).
 n_immediate_hh_max=0; n_outside_hh_max=0; n_tempdev_hh_max=0;
 n_immediate_hh_final=0; n_outside_hh_final=0; n_tempdev_hh_final=0;
+
+% --- subsidy sweep-analysis accumulators (chat 2026-09-15) ---
+% See HH_subsidy_targeted.m / cal_bui_sa_subsidy_targeted.m's own header
+% comments for exactly what each counts and why (cumulative distinct
+% recipients, and total aid actually paid out over time - not one-time
+% grant amounts).
+n_hh_subsidized_total=0;
+total_aid_distributed=0;
+n_businesses_subsidized_total=0;
+businesses_subsidized_ever_ids=[];
 
 %% start running
 if ~exist('loop_start_tic','var'); loop_start_tic=tic; end
@@ -961,67 +999,6 @@ for i=1:steps
         end
     end
 
-    %% medium-term sheltering: close temporary-development spaces
-    % One-time event, temp_dev_duration steps after the sites opened.
-    % Anyone still assigned is force-released into the out-of-city
-    % overflow pool (Sheltered_Outside) - same mechanics as the
-    % capacity-exhaustion overflow path above. Nothing is left behind:
-    % these were never Build_Data rows, so there's no building to revert
-    % or delete - the sites' own bookkeeping (Temp_Dev_Sites) is just
-    % stamped with an end step and Temp_Dev_Assign is cleared out.
-    if displaced_shelter==1 && temp_dev_spawned && ~temp_dev_closed && i >= shock_step + temp_dev_delay + temp_dev_duration
-        temp_dev_closed = true;
-        if ~isempty(Temp_Dev_Assign)
-            remaining_hh = unique(Individuals_data(ismember(Individuals_data(:,1), Temp_Dev_Assign(:,1)), 3));
-            for h = 1:length(remaining_hh)
-                hh_id = remaining_hh(h);
-                hh_row = find(HH_data(:,2)==hh_id, 1);
-                if isempty(hh_row)
-                    continue
-                end
-                hh_agents = Individuals_data(Individuals_data(:,3)==hh_id, 1);
-                Temp_Dev_Assign(ismember(Temp_Dev_Assign(:,1),hh_agents),:) = [];
-
-                penalty = outside_commute_penalty_pct * HH_data(hh_row,6);
-                HH_data(hh_row,6) = HH_data(hh_row,6) - penalty;
-                Sheltered_Outside = [Sheltered_Outside; hh_id, i, penalty];
-
-                % same working/non-working split as the shock-time overflow
-                % path above - see its comment for the full rationale
-                [~, locAg] = ismember(hh_agents, Individuals_data(:,1));
-                is_working = Individuals_data(locAg,12)==2 & Individuals_data(locAg,17)>0 & Individuals_data(locAg,17)~=99;
-                working_agents = hh_agents(is_working);
-                nonworking_agents = hh_agents(~is_working);
-
-                if ~isempty(working_agents)
-                    [~, locWA] = ismember(working_agents, Individuals_data(:,1));
-                    [foundWp, locWp] = ismember(Individuals_data(locWA,17), Work_places(:,6));
-                    % a recorded work_place_id can point at a slot that's
-                    % already been removed from Work_places elsewhere this
-                    % same step (e.g. the land-use job-loss cleanup) -
-                    % agents with no locatable workplace fall through to
-                    % the non-working (blunt suppression) treatment instead
-                    nonworking_agents = [nonworking_agents; working_agents(~foundWp)];
-                    working_agents = working_agents(foundWp);
-                    locWA = locWA(foundWp);
-                    locWp = locWp(foundWp);
-                    if ~isempty(working_agents)
-                        wp_xy = Work_places(locWp,3:4);
-                        Outside_Activity_Backup = [Outside_Activity_Backup; working_agents, Individuals_data(locWA,20)];
-                        Individuals_data(locWA,20) = round(Individuals_data(locWA,20) * (1-outside_commute_penalty_pct));
-                        routine_recompute_ids = [routine_recompute_ids; working_agents];
-                        routine_home_override = [routine_home_override; working_agents, wp_xy];
-                    end
-                end
-                if ~isempty(nonworking_agents)
-                    a_idx = ismember(Building_routine_id(:,1), nonworking_agents);
-                    Building_routine_id(a_idx, 4:end) = NaN;
-                end
-            end
-        end
-        Temp_Dev_Sites(Temp_Dev_Sites(:,6)==0, 6) = i; % stamp end step on whichever sites are still open
-    end
-
     %% damaged building list
 
     if shock == 1
@@ -1140,7 +1117,7 @@ for i=1:steps
         end
     end
 
-    [HH_data,Individuals_data,HH_track]=HH_subsidy_targeted(HH_data,Individuals_data,HH_destroyed,HH_track,Assets,bad_Assets,subsidy_residents_mode,subsidy_duration,i);
+    [HH_data,Individuals_data,HH_track,n_hh_subsidized_total,total_aid_distributed]=HH_subsidy_targeted(HH_data,Individuals_data,HH_destroyed,HH_track,Assets,bad_Assets,Shelter_Assign,Sheltered_Outside,Temp_Dev_Assign,subsidy_residents_mode,subsidy_duration,i,n_hh_subsidized_total,total_aid_distributed);
 
     % HH still waiting in shelter after this step's releases/new
     % assignments above - these retry the within-SA search every step
@@ -1203,8 +1180,11 @@ for i=1:steps
     if isempty(moving_HH)==0 % assign new asset for agent
         [HH_ID_left,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data]...
             =find_new_house_same_stat(HH_ID_left,pd,HH_data,Individuals_data, ...
-            Build_Data,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,bad_Assets);
-
+            Build_Data,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change);
+        % resSearchLen: reset the consecutive-fail counter (col 13) for
+        % anyone in this step's K=2 candidate pool who is NOT among the
+        % failures just returned - i.e., they found a home this step.
+        HH_data(ismember(HH_data(:,2), setdiff(moving_HH, HH_ID_left)), 13) = 0;
     end
 
     moving_HH=who_is_moving(HH_data,random_number,unique_stat,intra_SA,3); % K=3, probability of moving within the city
@@ -1212,7 +1192,11 @@ for i=1:steps
     if isempty(moving_HH)==0
         [HH_ID_left,HH_data,Assets,HH_change,LU,new_A,new_B,Build_Data]= ...
             find_new_house_yeshuv(HH_ID_left,pd,HH_data,Individuals_data,Build_Data ...
-            ,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,bad_Assets);
+            ,Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change);
+        % resSearchLen: reset the consecutive-fail counter for anyone in
+        % this step's K=3 candidate pool who is NOT among the (K=2+K=3)
+        % failures just returned.
+        HH_data(ismember(HH_data(:,2), setdiff(moving_HH, HH_ID_left)), 13) = 0;
     end
 
 
@@ -1251,6 +1235,19 @@ for i=1:steps
     % recovers, as opposed to the temporary sheltering tiers above (which
     % always eventually release when patient, never delete on their own).
     n_permanently_displaced_total = n_permanently_displaced_total + sum(ismember(HH_ID_left, [Sheltered_Outside(:,1); still_temp_dev_hh; still_sheltered_hh]));
+
+    % resSearchLen retry gate (ported from modelthesis): increments the
+    % consecutive-fail counter for everyone about to be evicted below; only
+    % those who've now reached resSearchLen actually proceed to deletion -
+    % everyone else keeps their (incremented) counter and simply isn't
+    % passed to did_not_find_house this step, so they stay in HH_data and
+    % get another chance whenever they're next selected to move.
+    if ~isempty(HH_ID_left)
+        [locA,~] = ismember(HH_data(:,2), HH_ID_left);
+        HH_data(locA,13) = HH_data(locA,13) + 1;
+        [~,locB] = ismember(HH_ID_left, HH_data(:,2));
+        HH_ID_left = HH_ID_left(HH_data(locB,13) >= resSearchLen);
+    end
 
     %% delete HH that left (sheltered HH exempted above stay in the sim)
     [Individuals_data,Work_places,HH_data,Assets,HH_ID_left]=did_not_find_house(HH_ID_left,Individuals_data,Work_places,HH_data,Assets);
@@ -1291,12 +1288,23 @@ for i=1:steps
                 
         %% mean salary for all buildings withe workers comm only!!!
         %building_average_salary=cal_bui_sa(Work_places,Build_Data); % building sum salary
-        building_average_salary=cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, subsidy_businesses_mode); % building sum salary
-        P=[0,prctile(building_average_salary(:,2),1:100)]; % salary by precentiles
+        [building_average_salary,n_businesses_subsidized_total,businesses_subsidized_ever_ids]=cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids); % building sum salary
+        % STABLE-YARDSTICK FIX (chat 2026-09-15): build the percentile scale
+        % from col(3), every building's REAL unsubsidized wage sum - not
+        % col(2), the eligibility-adjusted one - so the scale itself never
+        % moves no matter how many buildings a subsidy mode touches (mode 2
+        % can affect ~30% of all commercial buildings at once, which used to
+        % visibly compress the whole distribution and silently shift every
+        % OTHER building's rank too). Each building's own rank is still
+        % looked up using col(2), so a subsidized building still benefits
+        % from looking cheaper - just against a scale that non-subsidized
+        % businesses are never punished by. See cal_bui_sa_subsidy_targeted.m's
+        % header for the full writeup.
+        P=[0,prctile(building_average_salary(:,3),1:100)]; % salary by precentiles, from the STABLE (unsubsidized) column
         % Vectorized - same reasoning as the MVB30 ranking above.
         rank_col = sum(building_average_salary(:,2) >= P(1:100), 2);
         rank_col(rank_col==0) = 100; % highest score
-        building_average_salary(:,3) = rank_col;
+        building_average_salary(:,4) = rank_col;
         
         %% empty building or residance - potential salary
         B=Build_Data(Build_Data(:,3)<2,:); % living or combined and no HH
@@ -1306,12 +1314,12 @@ for i=1:steps
         
         %% find_comm_visit_rank
         [locA,locB]=ismember(building_average_salary(:,1),MVB30(:,1)); % locate building id in visits metrix
-        building_average_salary(locA,4)=MVB30(locB(locB>0),3); % col(4) visits ranking
-        building_average_salary(:,5)=building_average_salary(:,4)-building_average_salary(:,3); % diff in ranks
-        
-        %% new jobs - com only 
+        building_average_salary(locA,5)=MVB30(locB(locB>0),3); % col(5) visits ranking (col(3)=original wage, col(4)=salary rank - see cal_bui_sa_subsidy_targeted.m)
+        building_average_salary(:,6)=building_average_salary(:,5)-building_average_salary(:,4); % diff in ranks: visits rank(5) - salary rank(4)
+
+        %% new jobs - com only
         % check sensitivity of condition limit
-        new_jobs=building_average_salary(building_average_salary(:,5)>20,1); % only rank diff above 20 vector
+        new_jobs=building_average_salary(building_average_salary(:,6)>20,1); % only rank diff above 20 vector
         std_wage_1 = std_wage/3; % normilize std wage value
 		B_D = [];
         for jjjj=1:length(new_jobs)
@@ -1335,7 +1343,7 @@ for i=1:steps
         end
 
         %% lost jobs
-        lost_jobs_B_ID=building_average_salary(building_average_salary(:,5)<-20,1); % only rank diff below -20 vector
+        lost_jobs_B_ID=building_average_salary(building_average_salary(:,6)<-20,1); % only rank diff below -20 vector
         lost_jobs_B_ID=Build_Data(ismember(Build_Data(:,1),lost_jobs_B_ID),[1,17]); % all matching ID cols(1 and 17)
         [~, newB] = ismember(lost_jobs_B_ID(:,1),Work_places(:,1)); % building ID first index matching
         lost_jobs_WP_ID = Work_places( newB,[1,5]); % current WP count out of avalible by building
@@ -1430,7 +1438,13 @@ for i=1:steps
             Change_LU=[];
             Mcand = size(pot_sal_for_B,1);
             if Mcand>0
-                base_col = building_average_salary(:,2);
+                % STABLE-YARDSTICK FIX (chat 2026-09-15): col(3), not col(2)
+                % - same reasoning as the job-growth/loss ranking above.
+                % Candidate buildings get compared against the real,
+                % unsubsidized commercial wage distribution, not one
+                % artificially compressed by however many buildings a
+                % subsidy mode happens to be covering that week.
+                base_col = building_average_salary(:,3);
                 cand_vals = pot_sal_for_B(:,2)'; % 1 x Mcand
                 A_mat = [repmat(base_col,1,Mcand); cand_vals]; % (Nbase+1) x Mcand
                 P_raw = prctile(A_mat,1:100); % 100 x Mcand normally, but Mcand==1 makes A_mat a plain column vector and prctile degenerates to a 1x100 row instead
@@ -1518,7 +1532,7 @@ for i=1:steps
                 [HH_ID_left,HH_data,Assets,HH_change,LU,...
                     new_A,new_B,Build_Data]...
                     =find_new_house_same_stat(HH_ID_left,pd,HH_data,Individuals_data,Build_Data,...
-                    Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change,bad_Assets);
+                    Build_Distance_matrix_400,Assets,wresd,moving_HH,LU,new_A,new_B,HH_change);
             end
             % NOTE: find_new_house_same_stat above already cascades
             % same-SA -> same-yeshuv-other-SA -> other-yeshuv internally
@@ -1665,6 +1679,17 @@ for i=1:steps
     % entries after the first computation.
     patient_lu_hh = LU_Displaced(i - LU_Displaced(:,2) < outside_patience_duration, 1);
     HH_ID_left = HH_ID_left(~ismember(HH_ID_left, patient_lu_hh));
+    % resSearchLen retry gate (see the K=2/K=3 site above for full
+    % explanation). HH_ID_left is normally already [] by this point (the
+    % earlier did_not_find_house call this step reset it, and migration_19
+    % doesn't populate it) - kept for defensiveness/consistency in case
+    % that ever isn't true.
+    if ~isempty(HH_ID_left)
+        [locA,~] = ismember(HH_data(:,2), HH_ID_left);
+        HH_data(locA,13) = HH_data(locA,13) + 1;
+        [~,locB] = ismember(HH_ID_left, HH_data(:,2));
+        HH_ID_left = HH_ID_left(HH_data(locB,13) >= resSearchLen);
+    end
     [Individuals_data,Work_places,HH_data,Assets,HH_ID_left]=did_not_find_house(HH_ID_left,Individuals_data,Work_places,HH_data,Assets);
     
     %% number of routine per person
@@ -1923,20 +1948,22 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             SA_OUTCOME SA_POP SA_PRICE SA_SERVICE SA_WAGE SA_WP SA_RESIDENT SA_HOUSE SA_COMERCIAL...
             SA_IDLE SA_LOCAL SA_WORKING SA_JOBS SA_FIRST SA_SECOND SA_THIRD SA_FOURTH...
             SA_FIFTH SA_SIXTH SA_SEVENTH SA_EIGHTH SA_NINTH SA_TENTH SA_AREA...
-            steps city run_timestamp shock_step...
+            steps city run_timestamp shock_step resSearchLen...
             jobs_per_meter_multiplier potential_jobs_per_meter_multiplier lu_change_rank_lower lu_change_rank_upper JobsPerM_comm...
             alfa beta lamda delta...
             displaced_shelter agents_per_sqm public_bldg_usable_fraction restrict_public_shelters_to_schools...
             hotel_room_density agents_per_room Shelters Shelter_Assign...
             subsidy_residents_mode subsidy_businesses_mode subsidy_duration HH_track...
-            outside_commute_penalty_pct outside_patience_duration tempdev_patience_duration Sheltered_Outside LU_Displaced temp_dev_delay temp_dev_duration...
+            outside_commute_penalty_pct outside_patience_duration tempdev_patience_duration Sheltered_Outside LU_Displaced temp_dev_delay...
             n_temp_dev_sites temp_dev_capacity_frac temp_dev_site_coords Temp_Dev_Sites Temp_Dev_Assign...
             sumdata destroyed_B RECOVERY bad_Assets...
             n_destroyed_total n_reconstructed_final...
             n_immediate_hh_max n_outside_hh_max n_tempdev_hh_max...
             n_immediate_hh_final n_outside_hh_final n_tempdev_hh_final...
             n_immediate_hh_track n_outside_hh_track n_tempdev_hh_track...
-            n_permanently_displaced_total n_permanently_displaced_track
+            n_permanently_displaced_total n_permanently_displaced_track...
+            n_hh_subsidized_total total_aid_distributed n_businesses_subsidized_total businesses_subsidized_ever_ids...
+            rng_seed
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk),' ',run_uid]);
 save(full_file_name);
 end

@@ -41,6 +41,48 @@ configuration" under Policies and mechanisms below.
 
 ---
 
+## Standard Parameters
+
+The values below are what the Quick Start drivers use by default — listed
+here as a quick reference without having to open each driver or the later
+Policies section.
+
+### Shared by baseline and shock runs
+
+These apply regardless of whether a shock ever fires — including the
+no-shock baseline drivers ([`run_ashkelon_baseline_step25_150.m`](run_ashkelon_baseline_step25_150.m) /
+[`run_tiberias_calibrated.m`](run_tiberias_calibrated.m)).
+
+| Parameter | Default | What it controls |
+|---|---|---|
+| `steps` | `150` | Total simulation length, in weeks |
+| `lu_warmup` | `4` | Weeks before the land-use/business-conversion module starts running at all |
+| `lu_update_every` | `1` | Land-use module runs every Nth step once past `lu_warmup` (raise to speed up a test run) |
+| `jobs_per_meter_multiplier` / `potential_jobs_per_meter_multiplier` / `lu_change_rank_lower` / `lu_change_rank_upper` | `1` / `1` / `20` / `40` | Land-use commercial-conversion multipliers/thresholds — Tiberias's own validated calibration is `3`/`2`/`45`/`85` (see Land-use conversion calibration) |
+| `RECOVERY` | `1-(1-0.3135)^(1/52)` (~0.72%/week) | Per-building weekly probability of reconstruction, applied uniformly across building types by default — only actually destroyed buildings are affected, so this is inert in a no-shock baseline |
+| `rng_seed` | unset (`rng('shuffle')`) | Pass a value to pin a specific random seed for reproducibility; omit for independent replicates |
+
+### Baseline-only
+
+| Parameter | Default | What it controls |
+|---|---|---|
+| `shock_step` | `900` (unset) | Stays past `steps`, so the earthquake block never fires |
+| `n_sims` | `5` | Baseline has no history of the shock scenario's `n_sims>=2` crash pattern, so 5 replicates run safely in one process |
+
+### Shock-only
+
+| Parameter | Default | What it controls |
+|---|---|---|
+| `shock_step` | `25` | Week the earthquake hits — clears the land-use module's initial-activation transient first (see Validated shock scenario configuration) |
+| `temp_dev_delay` | `2` | Weeks after the shock before temporary-development sites open |
+| `outside_patience_duration` | `4` | Weeks an out-of-city overflow household (or one displaced by land-use conversion) gets before permanent departure |
+| `tempdev_patience_duration` | `8` | Weeks a temp-dev household gets before permanent departure |
+| `n_sims` | `1` | Kept at 1 for shock scenarios specifically due to an unexplained `n_sims>=2`-in-one-process crash history — run multiple separate `matlab -batch` invocations instead to build up replicates |
+
+See "Policies and mechanisms" below for the reasoning behind each.
+
+---
+
 ## Standard output
 
 To generate a standard report from one or more runs, use
@@ -151,10 +193,10 @@ section is a summary.
    households are the last moved into container-city conditions. Shuffled
    only *within* each tier. Applies identically in both a limited-capacity
    and a full-capacity (`temp_dev_capacity_frac=1`) scenario — only the
-   total capacity differs, not the fill order. Close after
-   `temp_dev_duration` weeks — remaining residents force-released to the
-   out-of-city pool (unless `tempdev_patience_duration` triggers permanent
-   departure first — see below).
+   total capacity differs, not the fill order. Households leave once they
+   secure a new asset, their original home recovers, or `tempdev_patience_duration`
+   triggers permanent departure (see below) — the sites themselves never
+   force-close.
    ([`site_temp_dev_locations.m`](site_temp_dev_locations.m)/[`release_temp_dev.m`](release_temp_dev.m))
 
 3. **Out-of-city overflow.** When the immediate tier runs out of capacity,
@@ -197,9 +239,8 @@ to find housing:
   has no search attempts at all, the patience clock can't start before
   stage 2 regardless of nominal entry time.
 - **`tempdev_patience_duration`** (default 8 weeks) — same mechanic, for
-  households in `Temp_Dev_Assign`. Set together with `temp_dev_duration=Inf`
-  to replace the site-closure/transfer mechanic entirely with a clean "N
-  steps in temp-dev or permanently displaced" rule.
+  households in `Temp_Dev_Assign`: N steps in temp-dev or permanently
+  displaced.
 - Recovering the original home or securing a new asset always takes
   priority and releases a household from these pools first — patience-based
   departure only ever catches households still genuinely unresolved once
@@ -216,6 +257,44 @@ calibrated from real data (31.35% of residential housing recovered within 1
 year: `RECOVERY = 1-(1-0.3135)^(1/52)`). Applied uniformly to all building
 types by default; `priority_recovery`/`recovery_factor` still lets residential
 recovery be scenario-tested at a different rate.
+
+### Subsidies
+
+Optional recovery-support policies, layered on top of the sheltering system
+above. Off by default (`subsidy_residents_mode=0`, `subsidy_businesses_mode=0`).
+
+**Household subsidy** (`subsidy_residents_mode`) — displaced households
+only, a decile-tiered percentage of the household's own previous housing
+cost (`Assets`/`bad_Assets` col 13, "cost of life"), added directly to
+household income for a fixed number of weeks:
+
+| Mode | Duration | Decile 7-10 | Decile 4-6 | Decile 1-3 |
+|---|---|---|---|---|
+| `5` | 4 weeks | 30% | 35% | 40% |
+| `6` | 8 weeks | 10% | 15% | 20% |
+
+Both modes use a fixed duration regardless of the `subsidy_duration`
+setting elsewhere, and run their full window regardless of whether the
+household resettles early. (Modes 1-4 were early, since-superseded
+designs, removed 2026-09-18.) See
+[`HH_subsidy_targeted.m`](HH_subsidy_targeted.m) for full mechanics.
+
+**Business subsidy** (`subsidy_businesses_mode`) — covers what an eligible
+commercial building owes its 2 lowest-paid workers (not its whole payroll;
+a 1-2-employee building ends up fully covered by default), fed into the
+same job-growth/loss ranking that governs the rest of the model:
+
+| Mode | Eligibility |
+|---|---|
+| `1` | Destroyed commercial buildings only |
+| `2` | Destroyed buildings, UNION the smallest 30% of commercial buildings by current worker headcount |
+
+The ranking scale itself is built from every building's real, unsubsidized
+wage total — not the subsidized one — so a subsidy mode that touches many
+buildings at once (mode 2) doesn't distort outcomes for buildings the
+policy never touched (the "stable yardstick" fix). See
+[`cal_bui_sa_subsidy_targeted.m`](cal_bui_sa_subsidy_targeted.m) for the
+full mechanism.
 
 ### Multi-city configuration
 
@@ -237,10 +316,9 @@ doesn't override them. modelthesis's validated Tiberias calibration
 
 ### Validated shock scenario configuration
 
-The standard shock-scenario setup (`shock_step`, `steps`, and whether
-`temp_dev_duration`'s site-closure mechanic runs alongside patience-based
-departure) was originally validated empirically for Ashkelon, then
-independently re-checked and ported to Tiberias (2026-09-15):
+The standard shock-scenario setup (`shock_step`, `steps`) was originally
+validated empirically for Ashkelon, then independently re-checked and
+ported to Tiberias (2026-09-15):
 
 - **`shock_step=25`, `steps=150`** — `shock_step` needs to clear the
   land-use module's initial-activation transient (a one-time large
@@ -251,10 +329,6 @@ independently re-checked and ported to Tiberias (2026-09-15):
   week 8** (`SA_SERVICE` flat from step 8 through step 200 in a 200-step
   no-shock baseline) — `shock_step=25` clears Tiberias's transient with
   an even larger margin than it does for Ashkelon's.
-- **`temp_dev_duration=Inf`** — disables the site-level force-close/
-  transfer-to-overflow mechanic, so temp-dev departures happen only via
-  `tempdev_patience_duration` (per-household patience) instead of two
-  competing exit mechanisms. See "Decreasing patience" above.
 - Ready-made drivers: see Quick Start above.
 - `n_sims=1` (run as its own process) is used for the shock driver,
   mirroring Ashkelon's same caution — that scenario type has an
@@ -398,15 +472,15 @@ seed instead, for exact reproducibility when that's wanted.
 
 **Uncalibrated placeholders** (present in the code, not yet set through
 sensitivity testing): `agents_per_room`, `public_bldg_usable_fraction`,
-`outside_commute_penalty_pct`, `temp_dev_capacity_frac`, `temp_dev_duration`,
-`temp_dev_delay`. `outside_patience_duration` (default 4 weeks) and
-`tempdev_patience_duration` (default 8 weeks) were both calibrated against
-Ashkelon's shock scenario and ported to Tiberias without independent
-Tiberias-specific sensitivity testing of the durations themselves (only the
-surrounding `shock_step`/`steps`/`temp_dev_duration` configuration was
-independently re-verified for Tiberias — see "Validated shock scenario
-configuration" above); permanent-displacement counts are sensitive to these,
-so revisit if that matters for a given run.
+`outside_commute_penalty_pct`, `temp_dev_capacity_frac`, `temp_dev_delay`.
+`outside_patience_duration` (default 4 weeks) and `tempdev_patience_duration`
+(default 8 weeks) were both calibrated against Ashkelon's shock scenario
+and ported to Tiberias without independent Tiberias-specific sensitivity
+testing of the durations themselves (only the surrounding
+`shock_step`/`steps` configuration was independently re-verified for
+Tiberias — see "Validated shock scenario configuration" above);
+permanent-displacement counts are sensitive to these, so revisit if that
+matters for a given run.
 
 **Temporal-resolution gaps identified but not resolved:**
 - **Job search** — confirmed structural issue. Each job-seeker gets exactly
