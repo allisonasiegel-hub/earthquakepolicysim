@@ -210,12 +210,32 @@ switch city
         JobsPerM_comm=0.0440838; % matches modellab\JER\model parameters.csv
         hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
     case 'Arad'
-        % data_for_model_Arad - generated via data_allocation/run_generate_arad.m
-        % (Arad/ raw data had never been ported before; see that script's
-        % header for the unit_size_scale=1.256 vacancy calibration, ~7%
-        % vacancy). No hotel-tagged variant exists yet, plain dataset,
-        % hotel_room_density=0.
-        data='data_for_model_Arad';
+        % data_for_model_Aradhotels (NOT the plain data_for_model_Arad) -
+        % generated via data_allocation/run_generate_arad.m (Arad/ raw
+        % data had never been ported before; see that script's header for
+        % the unit_size_scale=1.256 vacancy calibration, ~7% vacancy),
+        % then identify_hotels_Arad.m tags Arad's 3 known real hotels
+        % (Roxon Desert Arad, Hotel Inbar Arad, Yehelim Boutique Hotel -
+        % 230 total real rooms) as usage=7, same convention as
+        % Ashkelon/Tiberias's hotel-tagged datasets. Drop-in replacement,
+        % safe default.
+        %
+        % hotel_room_density=0.15029 (230 rooms / 1530 sqm floor-adjusted
+        % area across the 3 tagged buildings) - notably higher than
+        % Ashkelon's 0.02921 or Tiberias's 0.02128. Roxon Desert Arad's
+        % nearest-matched building (67178859, 57.7m away) has a Area=254
+        % sqm footprint implausible for a real 118-room hotel (~2.2
+        % sqm/room) - checked its 7 nearest neighbors (77-97m away, none
+        % meaningfully larger), so this reads as Arad's building dataset
+        % not well capturing this specific hotel's true footprint, not a
+        % bad nearest-building match. Also had floors=0 recorded (valid
+        % Area, missing floor count, not NaN so it wasn't caught by
+        % start_spatial_dataupdate.m's mean-fill) - identify_hotels_Arad.m
+        % patches that to floors=1 before calibrating. Kept the combined
+        % 3-hotel density as-is (not backing Roxon out of the calibration)
+        % per explicit confirmation 2026-09-19 - see identify_hotels_Arad.m's
+        % header for the full writeup.
+        data='data_for_model_Aradhotels';
         file=[fileparts(mfilename('fullpath')),'\Arad\']; % sas_national.xlsx here verified same 15-col layout as testingcodechanges
         % commute_outside: zone-99 share read directly from Arad\commuting.xlsx
         % (settlement 2560 = Arad's real CBS code, row2/col5=0.34) - same
@@ -233,7 +253,7 @@ switch city
         if ~exist('lamda','var'); lamda=0.95; end
         if ~exist('delta','var'); delta=0.50; end
         JobsPerM_comm=0.03400486; % matches modellab\Arad\model parameters.csv
-        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
+        hotel_room_density=0.15029; % rooms per sqm floor-adjusted area - see identify_hotels_Arad.m
     case 'Beer Sheva'
         % data_for_model_BS08 - generated via data_allocation/run_generate_beersheva.m
         % (BS08/ raw data had never been ported before; see that script's
@@ -282,6 +302,40 @@ load(data);
 % separate multi-step grace period via LU_Displaced/outside_patience_duration
 % further below, a mechanism modelthesis doesn't have.
 HH_data(:,13)=0;
+% Arad has zero usage=8 (school) buildings in its source data (like
+% Jerusalem/Ashkelon/Beer Sheva - only Tiberias has real school tags),
+% which makes the in-city "immediate" public-shelter tier a structural
+% no-op under restrict_public_shelters_to_schools=1 (assign_shelter.m
+% only accepts usage=8). classify_school_equivalent_buildings.m derives a
+% school-equivalent subset from Tiberias's real school data (4.79% of
+% public+school buildings, skewed toward the largest) - see that
+% function's header for the full method. Arad-only for now; the same call
+% could be added for JER/Ashkelon/BS08 if wanted later.
+if strcmp(city,'Arad')
+    Build_Data = classify_school_equivalent_buildings(Build_Data);
+end
+% original_HH_ids: snapshot of every household ID present at load time,
+% before any migration/shock/routine dynamics run this replicate. Used to
+% distinguish "original-cohort attrition" (n_original_hh_permanently_
+% displaced_total, below) from n_permanently_displaced_total's raw event
+% count, which also counts newly-migrated-in households (created by
+% migration_19.m to fill vacant housing) that later themselves get
+% permanently displaced - the two can differ substantially since the city
+% keeps gaining new households throughout the run, independent of the
+% shock.
+% original_HH_ids_remaining: mutable copy, pruned as each original
+% household is counted displaced (see the accumulator below) - NEEDED
+% because migration_19.m assigns new household IDs as
+% max(HH_data(:,2))+1, which can hand out an ID number that collides with
+% an EARLIER (already-departed) original household's ID once enough
+% churn has occurred - without pruning, a later migrant who happens to
+% reuse an original ID and is themselves later displaced would get
+% double-counted as if the original household left twice. Confirmed this
+% matters in practice: an Arad 250-step shock run hit
+% n_original_hh_permanently_displaced_total=11521, exceeding the entire
+% 9669-household original population, before this fix.
+original_HH_ids = HH_data(:,2);
+original_HH_ids_remaining = original_HH_ids;
 [sas_data,intra_SA,intra_P]=read_sas_data(file,'sas_national.xlsx'); %SA data
 % BUG FIX (Tiberias only): read_sas_data.m treats intraSAProb/
 % intraYeshuvProb (raw xlsx cols 11-12) as DAILY probabilities and
@@ -761,6 +815,16 @@ n_outside_hh_track=zeros(1,steps);
 n_tempdev_hh_track=zeros(1,steps);
 n_permanently_displaced_total=0;
 n_permanently_displaced_track=zeros(1,steps);
+% n_original_hh_permanently_displaced_total/track: same event (patience-
+% exhausted deletion from a sheltering tier) as n_permanently_displaced_
+% total above, but restricted to households that were part of the ORIGINAL
+% population (original_HH_ids, captured at load time) - excludes
+% newly-migrated-in households that arrive during the run and later
+% themselves get displaced. Answers "how many of the city's original
+% residents never came back", as opposed to the raw total displacement
+% EVENT count.
+n_original_hh_permanently_displaced_total=0;
+n_original_hh_permanently_displaced_track=zeros(1,steps);
 Outside_Activity_Backup=zeros(0,2); % [agent_id, original_number_of_activities] - for
 % working out-of-city commuters (see item 3 wiring below), col(20) gets
 % reduced by outside_commute_penalty_pct while they're outside; this
@@ -995,6 +1059,77 @@ for i=1:steps
                 site_row = find(Temp_Dev_Sites(:,1)==site_id, 1);
                 routine_recompute_ids = [routine_recompute_ids; hh_agents];
                 routine_home_override = [routine_home_override; hh_agents, repmat(Temp_Dev_Sites(site_row,2:3), n_needed, 1)];
+            end
+
+            % Public/school-sheltered households NOT selected for a
+            % temp-dev slot (temp-dev capacity is only temp_dev_capacity_frac
+            % of the combined immediate+outside pool, and public/school is
+            % merely first PRIORITY, not a guarantee) move to out-of-city
+            % overflow instead of remaining in their shelter building
+            % indefinitely - public buildings/schools are short-term
+            % emergency shelter, not a stable placement once the model has
+            % moved past the initial response into medium-term sheltering.
+            % Hotel-sheltered households are deliberately excluded here -
+            % they're already lowest priority for temp-dev precisely
+            % because hotels are the more comfortable option (see the
+            % priority-order comment above), so a hotel guest left over
+            % simply stays in the hotel, same as before this change.
+            % Same entry procedure as the shelter-capacity-exhausted
+            % overflow path (assign_shelter's unsheltered_agents branch,
+            % just above this block).
+            transferred_hh = unique(Individuals_data(ismember(Individuals_data(:,1), Temp_Dev_Assign(:,1)), 3));
+            leftover_public_hh = setdiff(public_hh, transferred_hh);
+            for lh = 1:length(leftover_public_hh)
+                hh_id = leftover_public_hh(lh);
+                hh_row = find(HH_data(:,2)==hh_id, 1);
+                if isempty(hh_row)
+                    continue
+                end
+                hh_agents = Individuals_data(Individuals_data(:,3)==hh_id, 1);
+
+                % free their shelter building - same release logic as the
+                % immediate-tier temp-dev transfer branch above
+                old_b_ids = unique(Shelter_Assign(ismember(Shelter_Assign(:,1),hh_agents),2));
+                Shelter_Assign(ismember(Shelter_Assign(:,1),hh_agents),:) = [];
+                for ob = 1:length(old_b_ids)
+                    if ~any(Shelter_Assign(:,2)==old_b_ids(ob))
+                        sidx = find(Shelters(:,1)==old_b_ids(ob), 1);
+                        if ~isempty(sidx)
+                            Build_Data(Build_Data(:,1)==old_b_ids(ob),3) = Shelters(sidx,4);
+                            Shelters(sidx,3) = i;
+                            Shelters(sidx,:) = [];
+                        end
+                    end
+                end
+
+                penalty = outside_commute_penalty_pct * HH_data(hh_row,6);
+                HH_data(hh_row,6) = HH_data(hh_row,6) - penalty;
+                Sheltered_Outside = [Sheltered_Outside; hh_id, i, penalty];
+
+                [~, locAg] = ismember(hh_agents, Individuals_data(:,1));
+                is_working = Individuals_data(locAg,12)==2 & Individuals_data(locAg,17)>0 & Individuals_data(locAg,17)~=99;
+                working_agents = hh_agents(is_working);
+                nonworking_agents = hh_agents(~is_working);
+
+                if ~isempty(working_agents)
+                    [~, locWA] = ismember(working_agents, Individuals_data(:,1));
+                    [foundWp, locWp] = ismember(Individuals_data(locWA,17), Work_places(:,6));
+                    nonworking_agents = [nonworking_agents; working_agents(~foundWp)];
+                    working_agents = working_agents(foundWp);
+                    locWA = locWA(foundWp);
+                    locWp = locWp(foundWp);
+                end
+                if ~isempty(working_agents)
+                    wp_xy = Work_places(locWp,3:4);
+                    Outside_Activity_Backup = [Outside_Activity_Backup; working_agents, Individuals_data(locWA,20)];
+                    Individuals_data(locWA,20) = round(Individuals_data(locWA,20) * (1-outside_commute_penalty_pct));
+                    routine_recompute_ids = [routine_recompute_ids; working_agents];
+                    routine_home_override = [routine_home_override; working_agents, wp_xy];
+                end
+                if ~isempty(nonworking_agents)
+                    a_idx = ismember(Building_routine_id(:,1), nonworking_agents);
+                    Building_routine_id(a_idx, 4:end) = NaN;
+                end
             end
         end
     end
@@ -1234,7 +1369,15 @@ for i=1:steps
     % home found - this is the shock-caused population loss that never
     % recovers, as opposed to the temporary sheltering tiers above (which
     % always eventually release when patient, never delete on their own).
-    n_permanently_displaced_total = n_permanently_displaced_total + sum(ismember(HH_ID_left, [Sheltered_Outside(:,1); still_temp_dev_hh; still_sheltered_hh]));
+    displaced_now = HH_ID_left(ismember(HH_ID_left, [Sheltered_Outside(:,1); still_temp_dev_hh; still_sheltered_hh]));
+    n_permanently_displaced_total = n_permanently_displaced_total + length(displaced_now);
+    % original-cohort subset (see original_HH_ids/original_HH_ids_remaining's
+    % init comment near load(data)) - match against the REMAINING set, then
+    % prune matched IDs so a later migrant who reuses one of these ID
+    % numbers can never be double-counted as the same original household.
+    is_original_displaced = ismember(displaced_now, original_HH_ids_remaining);
+    n_original_hh_permanently_displaced_total = n_original_hh_permanently_displaced_total + sum(is_original_displaced);
+    original_HH_ids_remaining = setdiff(original_HH_ids_remaining, displaced_now(is_original_displaced));
 
     % resSearchLen retry gate (ported from modelthesis): increments the
     % consecutive-fail counter for everyone about to be evicted below; only
@@ -1937,6 +2080,7 @@ for i=1:steps
     n_outside_hh_track(i) = n_outside_hh_now;
     n_tempdev_hh_track(i) = n_tempdev_hh_now;
     n_permanently_displaced_track(i) = n_permanently_displaced_total; % cumulative running total
+    n_original_hh_permanently_displaced_track(i) = n_original_hh_permanently_displaced_total; % cumulative running total, original cohort only
 
 end
 
@@ -1962,6 +2106,7 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             n_immediate_hh_final n_outside_hh_final n_tempdev_hh_final...
             n_immediate_hh_track n_outside_hh_track n_tempdev_hh_track...
             n_permanently_displaced_total n_permanently_displaced_track...
+            n_original_hh_permanently_displaced_total n_original_hh_permanently_displaced_track...
             n_hh_subsidized_total total_aid_distributed n_businesses_subsidized_total businesses_subsidized_ever_ids...
             rng_seed
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk),' ',run_uid]);
