@@ -84,6 +84,10 @@ Work_places = [ ...
 ];
 Build_Data = [10,0,3,0; 20,0,3,0; 30,0,3,0; 40,0,3,0]; % col1=id, col3=usage(3=commercial)
 destroyed_B = [10, 0, 0; 40, 0, 0]; % buildings 10 and 40 destroyed
+% destroyed_commercial_B0: all 4 test buildings are usage=3 throughout
+% (no land-use-conversion scenario here), so "destroyed AND was
+% originally commercial" is the same set as destroyed_B itself.
+destroyed_commercial_B0 = destroyed_B;
 
 % mode 1: only destroyed (buildings 10, 40) get the wage-drop treatment.
 % Building 10 has only 2 workers, so dropping its "2 lowest" drops both
@@ -91,7 +95,7 @@ destroyed_B = [10, 0, 0; 40, 0, 0]; % buildings 10 and 40 destroyed
 % dropping the 2 lowest (50,80) leaves [200,300] = 500 still counted
 % (PARTIAL coverage - this is the case the old zero-everything version
 % couldn't distinguish from full coverage).
-[r1, n_biz1, biz_ids1] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, 1, 0, []);
+[r1, n_biz1, biz_ids1] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 1, 0, []);
 fprintf('=== Business mode 1 (destroyed only) ===\n'); disp(r1);
 assert(r1(r1(:,1)==10,2) == 0, 'building 10 (destroyed, 2 workers) should be fully covered (both dropped)');
 assert(r1(r1(:,1)==20,2) == 200, 'building 20 (not destroyed) should be untouched');
@@ -110,7 +114,7 @@ assert(r1(r1(:,1)==40,3) == 630, 'building 40 original wage sum should be 50+80+
 % Counts: b10=2, b20=1, b30=3, b40=4. 30th percentile of [2,1,3,4] should
 % select building 20 (headcount 1, smallest) on the size side; buildings
 % 10 and 40 also qualify via the destroyed side.
-[r2, n_biz2, biz_ids2] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, 2, 0, []);
+[r2, n_biz2, biz_ids2] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 2, 0, []);
 fprintf('=== Business mode 2 (destroyed UNION smallest 30%% by headcount) ===\n'); disp(r2);
 assert(r2(r2(:,1)==10,2) == 0, 'building 10 (destroyed) should be fully covered under mode 2');
 assert(r2(r2(:,1)==20,2) == 200, 'building 20 qualifies by size but has only 1 worker so the >1-worker guard keeps it un-zeroed');
@@ -118,5 +122,22 @@ assert(r2(r2(:,1)==30,2) == 900, 'building 30 (not destroyed, not small) should 
 assert(r2(r2(:,1)==40,2) == 500, 'building 40 (destroyed) should keep its 2 highest earners under mode 2 too');
 assert(n_biz2 == 2, 'building 20 does NOT get counted (blocked by the >1-worker guard), so cumulative count is still 2');
 assert(isequal(sort(biz_ids2), [10;40]), 'subsidized-ever id list should be exactly {10,40} even under mode 2 (building 20 never actually gets subsidized)');
+
+% WAGE-YARDSTICK FIX regression test (chat 2026-09-20): building 50 is
+% CURRENTLY destroyed (in destroyed_B) but was NOT commercial when the
+% quake hit (absent from destroyed_commercial_B0) - simulating a
+% residential building destroyed by the earthquake that later got
+% converted to commercial via ordinary land-use growth, unrelated to the
+% quake. It must NOT be treated as an eligible destroyed business under
+% either mode, despite matching destroyed_B membership alone.
+Work_places_lu = [Work_places; 50,0,0,0,0,0,0,120; 50,0,0,0,0,0,0,180];
+Build_Data_lu = [Build_Data; 50,0,3,0]; % now commercial (post-conversion)
+destroyed_B_lu = [destroyed_B; 50,0,0]; % still tracked as destroyed
+% destroyed_commercial_B0 deliberately does NOT include building 50 -
+% it was residential (usage~=3) at shock time, not commercial.
+[r3, ~, biz_ids3] = cal_bui_sa_subsidy_targeted(Work_places_lu, Build_Data_lu, destroyed_B_lu, destroyed_commercial_B0, 1, 0, []);
+assert(r3(r3(:,1)==50,2) == 300, 'building 50 (destroyed-but-not-originally-commercial) must be untouched: 120+180=300, no wage-bill suppression');
+assert(~ismember(50, biz_ids3), 'building 50 must never be counted as a subsidized business');
+fprintf('PASS: a building destroyed while residential and later converted to commercial via land-use is correctly excluded from destroyed-business eligibility.\n\n');
 
 fprintf('\nALL TESTS PASSED\n');

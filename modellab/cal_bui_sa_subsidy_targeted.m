@@ -1,5 +1,25 @@
 function [building_average_sa, n_businesses_subsidized_total, businesses_subsidized_ever_ids] = cal_bui_sa_subsidy_targeted(...
-    Work_places, Build_Data, destroyed_B, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids)
+    Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids)
+% destroyed_commercial_B0: fixed, one-time snapshot (taken at shock time
+% in run_model_earthquake_shelteroverflow.m, before shock_W/shock_I strip
+% anything) of buildings that were ALREADY commercial (usage=3) the
+% moment the earthquake hit. REQUIRED for the "destroyed" half of modes
+% 1/2's eligibility (see below) - destroyed_B alone isn't enough, since
+% it just tracks "currently still destroyed" and doesn't know a
+% building's usage history. Change_LU's candidate pool
+% (Build_Data(:,3)<2) doesn't check destruction status, so a RESIDENTIAL
+% building destroyed by the quake can sit in destroyed_B for many steps
+% while ALSO getting converted to commercial with a brand-new, real
+% workforce via ordinary land-use growth - unrelated to the earthquake's
+% business impact. Without this distinction that building would
+% incorrectly qualify as an eligible "destroyed business" too. Confirmed
+% happening for Arad (chat 2026-09-20): 68 buildings, all usage=1 at
+% shock time and usage=3 by end of run, several still in destroyed_B at
+% the final step, continuously eligible for the "drop 2 lowest earners"
+% wage-bill suppression below despite having nothing to do with the
+% quake - the actual cause of a large, consistent, widening negative
+% "jobs saved" a subsidy sweep found for modes 1/2.
+%
 % n_businesses_subsidized_total/businesses_subsidized_ever_ids:
 % pass-through accumulators (same threading pattern as HH_subsidy_
 % targeted.m's counters - init once outside the step loop, fed back in
@@ -66,6 +86,13 @@ function [building_average_sa, n_businesses_subsidized_total, businesses_subsidi
     if ~isempty(destroyed_B)
         destroyed_ids = destroyed_B(:,1);
     end
+    % "was destroyed AND was already commercial when hit" - see
+    % destroyed_commercial_B0's header comment above for why both
+    % conditions are required, not just destroyed_ids membership.
+    orig_commercial_ids = 0;
+    if ~isempty(destroyed_commercial_B0)
+        orig_commercial_ids = destroyed_commercial_B0(:,1);
+    end
 
     worker_counts = zeros(length(u2),1);
     for i = 1:length(u2)
@@ -81,11 +108,12 @@ function [building_average_sa, n_businesses_subsidized_total, businesses_subsidi
         building_salaries = Work_places(Work_places(:,1) == u2(i), 8); % col 8 'salary'
         original_sum = sum(building_salaries);
         eligible = false;
+        was_destroyed_commercial = ismember(u2(i), destroyed_ids) && ismember(u2(i), orig_commercial_ids);
         switch subsidy_businesses_mode
             case 1
-                eligible = ismember(u2(i), destroyed_ids);
+                eligible = was_destroyed_commercial;
             case 2
-                eligible = ismember(u2(i), destroyed_ids) || worker_counts(i) <= size_threshold;
+                eligible = was_destroyed_commercial || worker_counts(i) <= size_threshold;
         end
         if eligible && length(building_salaries) > 1
             % Drop the 2 lowest-paid workers' salaries from the counted

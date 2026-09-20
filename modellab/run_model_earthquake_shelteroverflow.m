@@ -780,6 +780,24 @@ for g=1:length(g_sa)
 end
 
 destroyed_B=[];
+% destroyed_commercial_B0: fixed, one-time snapshot (set at shock time
+% below) of buildings that were ALREADY commercial (usage=3) the moment
+% the earthquake hit - distinct from destroyed_B, which just tracks
+% "currently still destroyed" and shrinks as buildings recover. NEEDED
+% because Change_LU's candidate pool (Build_Data(:,3)<2) doesn't check
+% destruction status - a residential building destroyed by the quake can
+% sit in destroyed_B for many steps while ALSO getting converted to
+% commercial (usage=3) with a brand-new, real workforce via ordinary
+% land-use growth, completely unrelated to the earthquake. Without this
+% distinction, cal_bui_sa_subsidy_targeted.m's destroyed-business
+% eligibility check (modes 1/2) would incorrectly match that building too
+% - confirmed happening for Arad (chat 2026-09-20): 68 buildings, all
+% usage=1 at shock time and usage=3 by end of run, several still in
+% destroyed_B at step 150, continuously eligible for the "drop 2 lowest
+% earners" wage-bill suppression despite having nothing to do with the
+% quake's business impact - the actual cause of the large, consistent,
+% widening negative "jobs saved" a subsidy sweep found for modes 1/2.
+destroyed_commercial_B0=[];
 bad_Assets=[]; % pool of destroyed dwelling-unit assets, persists across
 % steps like destroyed_B - MUST be initialized once here, not reset every
 % step inside the loop, or the per-step recovery block (which restores an
@@ -1502,7 +1520,7 @@ for i=1:steps
                 
         %% mean salary for all buildings withe workers comm only!!!
         %building_average_salary=cal_bui_sa(Work_places,Build_Data); % building sum salary
-        [building_average_salary,n_businesses_subsidized_total,businesses_subsidized_ever_ids]=cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids); % building sum salary
+        [building_average_salary,n_businesses_subsidized_total,businesses_subsidized_ever_ids]=cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids); % building sum salary
         % STABLE-YARDSTICK FIX (chat 2026-09-15): build the percentile scale
         % from col(3), every building's REAL unsubsidized wage sum - not
         % col(2), the eligibility-adjusted one - so the scale itself never
