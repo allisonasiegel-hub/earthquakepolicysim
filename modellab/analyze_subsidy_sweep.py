@@ -21,7 +21,7 @@ import csv
 import numpy as np
 import scipy.io as sio
 
-MODE_LABEL = {0: 'off', 5: 'mode 5', 6: 'mode 6'}
+MODE_LABEL = {0: 'off', 1: 'mode 1', 2: 'mode 2', 3: 'mode 3', 4: 'mode 4', 5: 'mode 5', 6: 'mode 6'}
 
 
 def load_row(path):

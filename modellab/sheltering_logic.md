@@ -89,11 +89,7 @@ Households are shuffled only *within* each tier, never across tiers.
 - From tier 2: the exact commute penalty is refunded, same as a normal tier-2 release.
 - Anyone not transferred (capacity ran out) simply stays in whichever tier they were already in — no further cascade needed, since tier 2 is already the catch-all.
 
-### Closing (one-time, `i >= shock_step + temp_dev_delay + temp_dev_duration`)
-
-Everyone still in `Temp_Dev_Assign` is force-released into tier 2 (`Sheltered_Outside`) — same income-penalty and routine-suppression mechanics as a normal tier-2 entry. `Temp_Dev_Assign` is cleared and every open row in `Temp_Dev_Sites` gets its `end_step` stamped. Since no `Build_Data` row was ever created, there's nothing to revert or delete.
-
-### Natural release (every step, before duration expires)
+### Natural release (every step)
 
 [`release_temp_dev.m`](release_temp_dev.m):
 ```
@@ -102,18 +98,18 @@ Everyone still in `Temp_Dev_Assign` is force-released into tier 2 (`Sheltered_Ou
 Same two exit conditions as the other tiers (original home recovered, or new asset secured) — called from the same per-step recovery block as `release_shelter.m`/`release_outside_shelter.m`.
 
 **Data structures:**
-- `Temp_Dev_Sites` — `[site_id, X, Y, capacity, start_step, end_step]` (`end_step=0` while open)
-- `Temp_Dev_Assign` — `[agent_id, site_id]`
+- `Temp_Dev_Sites` — `[site_id, X, Y, capacity, start_step, end_step]` (`end_step` is vestigial — no longer written since the site-closure mechanic was removed, see below)
+- `Temp_Dev_Assign` — `[agent_id, site_id, start_step]` (`start_step` is each agent's own temp-dev entry step, used by `tempdev_patience_duration`)
 
 **New parameters** (all in the policy block):
 | Parameter | Default | Meaning |
 |---|---|---|
-| `temp_dev_delay` | 14 | steps after shock before sites open (~2 weeks daily) |
+| `temp_dev_delay` | 2 | weeks after shock before sites open |
 | `n_temp_dev_sites` | 3 | fixed site count |
 | `temp_dev_capacity_frac` | 0.75 | combined capacity ÷ total sheltered population, placeholder |
 | `temp_dev_site_coords` | `[]` | optional user-supplied `[X,Y]` siting, else data-driven |
-| `temp_dev_duration` | 180 | steps a site stays open, placeholder (~6 months daily) |
-| `outside_patience_duration` | 13 | steps a household tolerates being sheltered outside the city before it's removed from the sim if still unhoused (~3 months at weekly resolution) |
+| `outside_patience_duration` | 4 | weeks a household tolerates being sheltered outside the city (or displaced by a land-use conversion) before it's removed from the sim if still unhoused |
+| `tempdev_patience_duration` | 8 | same mechanic as `outside_patience_duration`, for households in temp-dev |
 
 ---
 
@@ -130,7 +126,7 @@ All sheltered households (any tier) are folded into the same `moving_HH` pool an
 ### Decreasing patience → permanent departure
 
 - **Tier 2 (out-of-city overflow) and `LU_Displaced`** (households evicted by a land-use conversion of their home, tracked the same way): governed by `outside_patience_duration` (default 4 weeks). Elapsed time is measured from whichever is later — the household's own entry, or the point at which search actually starts (see "stage 1/2" note below) — since nothing searches during stage 1 regardless of nominal entry time.
-- **Tier 3 (temp-dev)**: governed by `tempdev_patience_duration` (default 8 weeks, using each household's own `Temp_Dev_Assign` entry step). This is a *per-household* mechanic, independent of the *site-level* `temp_dev_duration` force-close/transfer-to-overflow described above — both can be active at once, or `temp_dev_duration=Inf` can disable the site-level mechanic entirely so tier-3 exits happen only via patience (this is Ashkelon's/Tiberias's current validated shock-scenario configuration — see the main README's "Validated shock scenario configuration").
+- **Tier 3 (temp-dev)**: governed by `tempdev_patience_duration` (default 8 weeks, using each household's own `Temp_Dev_Assign` entry step) — this is the only temp-dev exit-via-departure mechanism (the old site-level force-close/transfer-to-overflow mechanic was removed from the model, 2026-09-15).
 - Recovering the original home or securing a new asset always takes priority over any patience clock — departure only ever catches households still genuinely unresolved once time runs out.
 - Tracked in `n_permanently_displaced_total`/`n_permanently_displaced_track` — the only channel through which shock-caused population loss doesn't eventually recover.
 
@@ -144,5 +140,5 @@ All sheltered households (any tier) are folded into the same `moving_HH` pool an
 
 - Tier-3 site-fill is greedy within each priority tier (randomly shuffled inside a tier), not optimal bin-packing.
 - Households pulled from tier 2 into tier 3 stop being re-suppressed going forward, but there's no cached "original routine" to restore immediately the way tier-1 buildings get — their non-work routine cols stay `NaN` until the normal `HH_change → new_number_of_routine → find_activity_location_new_A` path eventually regenerates them.
-- `temp_dev_capacity_frac`, `temp_dev_duration`, and `outside_patience_duration` are uncalibrated placeholders, same status as `outside_commute_penalty_pct`, `agents_per_room`, `public_bldg_usable_fraction`.
+- `temp_dev_capacity_frac` is an uncalibrated placeholder, same status as `outside_commute_penalty_pct`, `agents_per_room`, `public_bldg_usable_fraction`.
 - Patience-based deletion (tier 2) only fires on a step where the household also fails the normal housing-search cascade — a household whose patience expires but who happens to find housing that exact same step is released normally instead, never deleted.

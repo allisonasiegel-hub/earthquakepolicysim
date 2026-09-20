@@ -67,6 +67,7 @@ CITY_PREFIX = {
     'Tiberias': 'hotels',   # data_for_model_TVR_hotels -> data2{end}='hotels'
     'Jerusalem': 'JER',
     'Arad': 'Arad',
+    'Beer Sheva': 'BS08hotels',   # data_for_model_BS08hotels -> data2{end}='BS08hotels'
 }
 
 MACRO_VARS = [
@@ -187,6 +188,29 @@ SHELTER_VARS = [
 # put permanent displacement on a second axis alongside the tiers).
 SHELTER_TRACK_VARS = ['n_immediate_hh_track', 'n_outside_hh_track', 'n_tempdev_hh_track',
                        'n_permanently_displaced_track']
+
+# Subsidy sweep-analysis scalars (see HH_subsidy_targeted.m / cal_bui_sa_
+# subsidy_targeted.m's own header comments, chat 2026-09-15/17) -- same
+# convention as SHELTER_VARS: reported as NaN/'n/a' for .mat files saved
+# before these were added, rather than erroring. subsidy_residents_mode
+# and subsidy_businesses_mode are the sweep axes themselves, included here
+# so the table is self-labeling even when the scenario --label doesn't
+# spell out the combo.
+SUBSIDY_VARS = [
+    ('subsidy_residents_mode', 'Residents subsidy mode'),
+    ('subsidy_businesses_mode', 'Businesses subsidy mode'),
+    ('n_hh_subsidized_total', 'Households subsidized (cumulative)'),
+    ('total_aid_distributed', 'Total aid distributed ($, by end of sim)'),
+    ('n_businesses_subsidized_total', 'Businesses subsidized (cumulative)'),
+]
+
+# Per-step cumulative aid track (chat 2026-09-19), same one-mat-per-
+# replicate/padded-to-shortest convention as SHELTER_TRACK_VARS above --
+# kept separate from that list (not folded in) since load_shelter_tracks'
+# callers unpack SHELTER_TRACK_VARS as a fixed 4-tuple (imm/out_/tmp/perm);
+# adding a 5th member there would silently break that unpacking. Missing
+# in .mat files saved before this track was added to the model script.
+AID_TRACK_VAR = 'total_aid_distributed_track'
 
 
 def find_files(root, pattern):
@@ -332,6 +356,41 @@ def load_shelter_tracks(files):
     return tracks, shock_step, temp_dev_delay
 
 
+def load_subsidy_outcomes(files):
+    """Same pattern as load_shelter_outcomes, for SUBSIDY_VARS: dict var ->
+    1D per-replicate scalar array, NaN for a file saved before that
+    variable existed."""
+    out = {v: [] for v, _ in SUBSIDY_VARS}
+    for f in files:
+        m = sio.loadmat(f, variable_names=[v for v, _ in SUBSIDY_VARS], simplify_cells=True)
+        for v, _ in SUBSIDY_VARS:
+            out[v].append(float(m[v]) if v in m else np.nan)
+    return {v: np.array(vals) for v, vals in out.items()}
+
+
+def load_aid_track(files):
+    """Returns (track, shock_step, temp_dev_delay) for one scenario's
+    replicate files -- same padded-to-shortest/first-file-metadata
+    convention as load_shelter_tracks, but for the single AID_TRACK_VAR
+    series instead of the fixed 4-tuple of shelter tracks. track is an
+    (n_replicates, n_steps) array, empty if no file in this scenario has
+    the variable."""
+    want = [AID_TRACK_VAR, 'shock_step', 'temp_dev_delay']
+    arrs = []
+    shock_step = temp_dev_delay = None
+    for i, f in enumerate(files):
+        m = sio.loadmat(f, variable_names=want, simplify_cells=True)
+        if AID_TRACK_VAR in m:
+            arrs.append(np.asarray(m[AID_TRACK_VAR]).astype(float).squeeze())
+        if i == 0:
+            shock_step = float(m['shock_step']) if 'shock_step' in m else None
+            temp_dev_delay = float(m['temp_dev_delay']) if 'temp_dev_delay' in m else None
+    if not arrs:
+        return np.array([]), shock_step, temp_dev_delay
+    n = min(len(a) for a in arrs)
+    return np.array([a[:n] for a in arrs]), shock_step, temp_dev_delay
+
+
 def _mean_std(a):
     return a.mean(axis=0), a.std(axis=0, ddof=1) if a.shape[0] > 1 else np.zeros(a.shape[1])
 
@@ -438,6 +497,42 @@ def build_permanent_displacement_fig(prepared, title_suffix):
     return fig
 
 
+def build_aid_over_time_fig(aid_scenario_tracks, title_suffix):
+    """Cumulative total aid distributed over time, one line per scenario
+    label -- mirrors build_permanent_displacement_fig's shape, but full
+    run length rather than the shock-to-settling window (a subsidy's own
+    duration, e.g. modes 5/6's fixed 4/8-step window, needn't line up with
+    when displacement itself settles, so that window isn't reused here).
+    Returns None if no scenario has a non-empty, non-all-zero track (e.g.
+    every scenario has subsidies off, or predates this track being saved)."""
+    plotted = [(label, track, shock_step, temp_dev_delay)
+               for label, track, shock_step, temp_dev_delay in aid_scenario_tracks
+               if track.size and np.any(track != 0)]
+    if not plotted:
+        return None
+
+    max_steps = max(track.shape[1] for _, track, _, _ in plotted)
+    multi = len(plotted) > 1
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for idx, (label, track, shock_step, temp_dev_delay) in enumerate(plotted):
+        steps = np.arange(1, track.shape[1] + 1)
+        dm, ds = _mean_std(track)
+        color = COLORS[idx % len(COLORS)] if multi else 'tab:red'
+        ax.plot(steps, dm, color=color, linewidth=2.4,
+                 label=f'Cumulative aid distributed{f" -- {label}" if multi else " (mean)"}')
+        ax.fill_between(steps, np.clip(dm - ds, 0, None), dm + ds, color=color, alpha=0.18)
+        if shock_step is not None and shock_step < max_steps:
+            _draw_shock_markers(ax, shock_step, temp_dev_delay)
+    ax.set_xlabel('Week')
+    ax.set_ylabel('Cumulative aid distributed ($)')
+    ax.set_xlim(1, max_steps)
+    ax.legend(loc='upper left', fontsize=9)
+    ax.set_title(f'Cumulative aid distributed over time{title_suffix}\n'
+                 f'mean ± 1 std across replicates')
+    plt.tight_layout()
+    return fig
+
+
 def plot_shelter_timeseries(scenario_tracks, out_dir, title_suffix):
     """Three "standard output" charts built from SHELTER_TRACK_VARS, for
     whichever labeled scenarios actually have a firing shock (shock_step
@@ -505,6 +600,19 @@ def plot_shelter_timeseries(scenario_tracks, out_dir, title_suffix):
 
     fig = build_permanent_displacement_fig(prepared, title_suffix)
     fig.savefig(os.path.join(out_dir, 'permanent_displacement.png'), dpi=150)
+    plt.close(fig)
+
+
+def plot_aid_timeseries(aid_scenario_tracks, out_dir, title_suffix):
+    """Standalone aid_distributed.png, mirroring plot_shelter_timeseries'
+    total_sheltered.png/permanent_displacement.png pattern but for
+    AID_TRACK_VAR. No-op (nothing saved) if build_aid_over_time_fig finds
+    no usable data."""
+    fig = build_aid_over_time_fig(aid_scenario_tracks, title_suffix)
+    if fig is None:
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(os.path.join(out_dir, 'aid_distributed.png'), dpi=150)
     plt.close(fig)
 
 
@@ -594,12 +702,45 @@ def build_table_figure(shelter_by_label, labels, title_suffix):
     return fig
 
 
-def plot_pdf_and_pngs(macros, labels, shelter_by_label, pdf_path, png_dir, title_suffix, scenario_tracks=None):
+def build_subsidy_table_figure(subsidy_by_label, labels, title_suffix):
+    """Same layout as build_table_figure, for SUBSIDY_VARS -- one column
+    per scenario label, so a sweep run with one --label per (residents_mode,
+    businesses_mode) combo renders as a side-by-side policy comparison
+    table (chat 2026-09-19)."""
+    row_labels = [desc for _, desc in SUBSIDY_VARS]
+    cell_text = [
+        [format_stat(subsidy_by_label.get(label, {}).get(v, [np.nan])) for label in labels]
+        for v, _ in SUBSIDY_VARS
+    ]
+    fig_h = 1.1 + 0.5 * len(SUBSIDY_VARS)
+    fig, ax = plt.subplots(figsize=(max(9, 2.3 * len(labels) + 4.5), fig_h))
+    ax.axis('off')
+    tbl = ax.table(cellText=cell_text, rowLabels=row_labels, colLabels=labels, loc='center', cellLoc='center')
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9.5)
+    tbl.scale(1, 1.7)
+    for (r, c), cell in tbl.get_celld().items():
+        if r == 0 or c == -1:
+            cell.set_text_props(weight='bold')
+            cell.set_facecolor('#eeeeee')
+    ax.set_title(f'Subsidy policy outcomes{title_suffix}\n'
+                 f'(mean across replicates; range shown in parentheses when replicates differ)',
+                 fontsize=12, pad=18)
+    fig.tight_layout()
+    return fig
+
+
+def plot_pdf_and_pngs(macros, labels, shelter_by_label, pdf_path, png_dir, title_suffix, scenario_tracks=None,
+                       subsidy_by_label=None, aid_scenario_tracks=None):
     os.makedirs(png_dir, exist_ok=True)
     with PdfPages(pdf_path) as pdf:
         table_fig = build_table_figure(shelter_by_label, labels, title_suffix)
         pdf.savefig(table_fig, bbox_inches='tight')
         plt.close(table_fig)
+        if subsidy_by_label:
+            subsidy_table_fig = build_subsidy_table_figure(subsidy_by_label, labels, title_suffix)
+            pdf.savefig(subsidy_table_fig, bbox_inches='tight')
+            plt.close(subsidy_table_fig)
         if scenario_tracks:
             prepared = _prepare_shelter_plot(scenario_tracks)
             if prepared is not None:
@@ -607,6 +748,11 @@ def plot_pdf_and_pngs(macros, labels, shelter_by_label, pdf_path, png_dir, title
                             build_permanent_displacement_fig(prepared, title_suffix)):
                     pdf.savefig(fig, bbox_inches='tight')
                     plt.close(fig)
+        if aid_scenario_tracks:
+            aid_fig = build_aid_over_time_fig(aid_scenario_tracks, title_suffix)
+            if aid_fig is not None:
+                pdf.savefig(aid_fig, bbox_inches='tight')
+                plt.close(aid_fig)
         for v, vlabel, detail, derived in ALL_VARS:
             if all((macro.get(v) or {}).get('values', np.array([])).size == 0 for macro in macros):
                 continue
@@ -653,8 +799,9 @@ def main():
     if not scenarios:
         raise SystemExit('Pass at least one --city or --pattern.')
 
-    macros, labels, shelter_by_label = [], [], {}
+    macros, labels, shelter_by_label, subsidy_by_label = [], [], {}, {}
     scenario_tracks = []
+    aid_scenario_tracks = []
     for label, pattern in scenarios:
         files = find_files(args.root, pattern)
         if not files:
@@ -663,8 +810,11 @@ def main():
         print(f'[{label}] {len(files)} replicate file(s): ' + ', '.join(os.path.basename(f) for f in files))
         macros.append(load_macro(files))
         shelter_by_label[label] = load_shelter_outcomes(files)
+        subsidy_by_label[label] = load_subsidy_outcomes(files)
         tracks, shock_step, temp_dev_delay = load_shelter_tracks(files)
         scenario_tracks.append((label, tracks, shock_step, temp_dev_delay))
+        aid_track, aid_shock_step, aid_temp_dev_delay = load_aid_track(files)
+        aid_scenario_tracks.append((label, aid_track, aid_shock_step, aid_temp_dev_delay))
         labels.append(label)
 
     if not macros:
@@ -675,8 +825,10 @@ def main():
     title_suffix = f' ({title_suffix})' if len(labels) > 1 else f' -- {labels[0]}'
 
     plot_grid(macros, labels, os.path.join(args.out, 'macro_trends.png'), title_suffix)
-    plot_pdf_and_pngs(macros, labels, shelter_by_label, os.path.join(args.out, 'macro_trends.pdf'), os.path.join(args.out, 'macro_pngs'), title_suffix, scenario_tracks=scenario_tracks)
+    plot_pdf_and_pngs(macros, labels, shelter_by_label, os.path.join(args.out, 'macro_trends.pdf'), os.path.join(args.out, 'macro_pngs'), title_suffix,
+                       scenario_tracks=scenario_tracks, subsidy_by_label=subsidy_by_label, aid_scenario_tracks=aid_scenario_tracks)
     plot_shelter_timeseries(scenario_tracks, args.out, title_suffix)
+    plot_aid_timeseries(aid_scenario_tracks, args.out, title_suffix)
     print(f'[done] -> {os.path.abspath(args.out)}')
 
 

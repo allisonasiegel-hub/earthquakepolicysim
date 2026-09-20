@@ -255,12 +255,15 @@ switch city
         JobsPerM_comm=0.03400486; % matches modellab\Arad\model parameters.csv
         hotel_room_density=0.15029; % rooms per sqm floor-adjusted area - see identify_hotels_Arad.m
     case 'Beer Sheva'
-        % data_for_model_BS08 - generated via data_allocation/run_generate_beersheva.m
-        % (BS08/ raw data had never been ported before; see that script's
-        % header for the census-units fix and the unit_size_scale=1.58
-        % vacancy calibration, ~7% vacancy). No hotel-tagged variant exists
-        % yet (unlike Ashkelon/Tiberias) - plain dataset, hotel_room_density=0.
-        data='data_for_model_BS08';
+        % data_for_model_BS08hotels (NOT the plain data_for_model_BS08) -
+        % identical except 3 buildings are tagged usage=7 (hotel) by
+        % identify_hotels_BS08.m. Drop-in replacement, safe default -
+        % same convention as Ashkelon/Tiberias. Base data_for_model_BS08
+        % generated via data_allocation/run_generate_beersheva.m (BS08/
+        % raw data had never been ported before; see that script's header
+        % for the census-units fix and the unit_size_scale=1.58 vacancy
+        % calibration, ~7% vacancy).
+        data='data_for_model_BS08hotels';
         file=[fileparts(mfilename('fullpath')),'\BS08\'];
         % commute_outside: zone-99 share read directly from BS08\commuting.xlsx
         % (settlement 9000 = Beer Sheva's real CBS code, row30/col5=0.519454) -
@@ -278,7 +281,12 @@ switch city
         if ~exist('lamda','var'); lamda=0.25; end
         if ~exist('delta','var'); delta=0.80; end
         JobsPerM_comm=0.013952158; % matches modellab\BS08\model parameters.csv
-        hotel_room_density=0; % no hotel buildings tagged for this city - harmless, the hotel candidate pool is simply empty
+        % rooms per sqm floor-adjusted area - 299 real rooms (CBS Table D/7,
+        % Sept 2023, hotelrooms.pdf) / 57,609 sqm across the 3 raw-code-
+        % confirmed hotels (Usage=5900 in BS08\bldgs_height_tt.csv, exactly
+        % matching the CBS count - no backfill needed) - see
+        % identify_hotels_BS08.m.
+        hotel_room_density=0.00519;
     otherwise
         error('Unknown city "%s" - add a case for it to the city configuration block.', city);
 end
@@ -289,6 +297,19 @@ end
 
 data2 = split(data, '_');
 load(data);
+% Arad, Beer Sheva, Ashkelon, and Jerusalem have zero usage=8 (school)
+% buildings in their source data - only Tiberias has real school tags -
+% which makes the in-city "immediate" public-shelter tier a structural
+% no-op under restrict_public_shelters_to_schools=1 (assign_shelter.m
+% only accepts usage=8). classify_school_equivalent_buildings.m derives a
+% school-equivalent subset from Tiberias's real school data (4.79% of
+% public+school buildings, skewed toward the largest) - see that
+% function's header for the full method. Ported to Ashkelon and Jerusalem
+% 2026-09-19 (chat that day) on top of the original Arad/Beer Sheva
+% application - every city with this gap now opts in.
+if strcmp(city,'Arad') || strcmp(city,'Beer Sheva') || strcmp(city,'Ashkelon') || strcmp(city,'Jerusalem')
+    Build_Data = classify_school_equivalent_buildings(Build_Data);
+end
 % resSearchLen retry mechanism (ported from
 % modelthesis/run_model_earthquake.m): col 13 tracks each HH's consecutive
 % failed housing-search attempts. did_not_find_house.m deletes a household
@@ -302,18 +323,6 @@ load(data);
 % separate multi-step grace period via LU_Displaced/outside_patience_duration
 % further below, a mechanism modelthesis doesn't have.
 HH_data(:,13)=0;
-% Arad has zero usage=8 (school) buildings in its source data (like
-% Jerusalem/Ashkelon/Beer Sheva - only Tiberias has real school tags),
-% which makes the in-city "immediate" public-shelter tier a structural
-% no-op under restrict_public_shelters_to_schools=1 (assign_shelter.m
-% only accepts usage=8). classify_school_equivalent_buildings.m derives a
-% school-equivalent subset from Tiberias's real school data (4.79% of
-% public+school buildings, skewed toward the largest) - see that
-% function's header for the full method. Arad-only for now; the same call
-% could be added for JER/Ashkelon/BS08 if wanted later.
-if strcmp(city,'Arad')
-    Build_Data = classify_school_equivalent_buildings(Build_Data);
-end
 % original_HH_ids: snapshot of every household ID present at load time,
 % before any migration/shock/routine dynamics run this replicate. Used to
 % distinguish "original-cohort attrition" (n_original_hh_permanently_
@@ -858,6 +867,7 @@ n_immediate_hh_final=0; n_outside_hh_final=0; n_tempdev_hh_final=0;
 % grant amounts).
 n_hh_subsidized_total=0;
 total_aid_distributed=0;
+total_aid_distributed_track=zeros(1,steps); % per-step snapshot of the cumulative running total, so aid-over-time can be plotted (chat 2026-09-19)
 n_businesses_subsidized_total=0;
 businesses_subsidized_ever_ids=[];
 
@@ -1177,11 +1187,68 @@ for i=1:steps
         % HH no house
         HH_destroyed=shock_H(HH_data,Assets);
 
+        % BUSINESS SUBSIDY (modes 1/2's destroyed-buildings half) - snapshot
+        % pre-shock Work_places/Individuals_data for destroyed commercial
+        % buildings' workers BEFORE shock_W/shock_I strip them below. See
+        % the restoration block right after shock_I for why (chat
+        % 2026-09-19, bug found by the Tiberias session).
+        pre_shock_wp_snapshot = zeros(0, size(Work_places,2));
+        pre_shock_ind_snapshot = zeros(0, size(Individuals_data,2));
+        if subsidy_businesses_mode == 1 || subsidy_businesses_mode == 2
+            destroyed_commercial_B0 = destroyed_B(ismember(destroyed_B(:,1), Build_Data(Build_Data(:,3)==3,1)), 1);
+            pre_shock_wp_snapshot = Work_places(ismember(Work_places(:,1), destroyed_commercial_B0), :);
+            pre_shock_ind_snapshot = Individuals_data(ismember(Individuals_data(:,17), pre_shock_wp_snapshot(:,6)), :);
+        end
+
         % lost jobs (work places id - to find workers) and delete working places
         [Work_places,lost_jobs]=shock_W(Work_places,destroyed_B);
         % people loosing work (change from working to looking) and
         % change location and keep track because need to change routine
         [Individuals_data,Ind_change_routine]=shock_I(Individuals_data,lost_jobs);
+
+        % BUSINESS SUBSIDY (modes 1/2's destroyed-buildings half) - restore
+        % 2 job slots per eligible destroyed commercial building (chat
+        % 2026-09-19). shock_W/shock_I above permanently strip EVERY
+        % destroyed building's Work_places rows and move those workers to
+        % job-search, so cal_bui_sa_subsidy_targeted.m's mode-1 eligibility
+        % check (ismember(building, destroyed_ids), keyed off live
+        % Work_places) could never fire - a destroyed building has 0
+        % current workers by the time that function is ever called, on any
+        % step (bug found by the Tiberias session: mode 1 supported 0
+        % businesses in every combo they ran). The b7-ported "the subsidy
+        % covers what the business would have owed its 2 lowest earners"
+        % framing doesn't literally apply once those earners' jobs are
+        % already gone - so here it's reinterpreted as: the subsidy
+        % PHYSICALLY saves the 2 lowest-paid workers' jobs at each eligible
+        % destroyed commercial building, undoing shock_W/shock_I for
+        % exactly those 2 Work_places rows/individuals. This both makes
+        % cal_bui_sa_subsidy_targeted.m's existing eligibility logic
+        % correctly fire from here on (the building has >1 live worker
+        % again, so its own per-step "drop the 2 lowest" accounting then
+        % covers their full wage bill every step) and directly moves
+        % SA_WP/"jobs saved" - the actual metric this sweep measures.
+        % Buildings with originally <=1 worker get nothing restored,
+        % matching the function's own ">1 worker" eligibility guard.
+        if subsidy_businesses_mode == 1 || subsidy_businesses_mode == 2
+            destroyed_commercial_B = destroyed_B(ismember(destroyed_B(:,1), Build_Data(Build_Data(:,3)==3,1)), 1);
+            for db = 1:length(destroyed_commercial_B)
+                bld_id = destroyed_commercial_B(db);
+                bld_rows = pre_shock_wp_snapshot(pre_shock_wp_snapshot(:,1)==bld_id, :);
+                if size(bld_rows,1) > 1
+                    [~, sort_idx] = sort(bld_rows(:,8), 'ascend'); % col 8 = salary, lowest-paid first
+                    n_save = min(2, size(bld_rows,1));
+                    rows_to_restore = bld_rows(sort_idx(1:n_save), :);
+                    Work_places = [Work_places; rows_to_restore];
+                    saved_wp_ids = rows_to_restore(:,6); % col 6 = workplace id
+                    restore_mask = ismember(pre_shock_ind_snapshot(:,17), saved_wp_ids);
+                    restored_agents = pre_shock_ind_snapshot(restore_mask, 1);
+                    [~, cur_idx] = ismember(restored_agents, Individuals_data(:,1));
+                    [~, snap_idx] = ismember(restored_agents, pre_shock_ind_snapshot(:,1));
+                    Individuals_data(cur_idx, [12,15,16,17]) = pre_shock_ind_snapshot(snap_idx, [12,15,16,17]);
+                    Ind_change_routine = setdiff(Ind_change_routine, restored_agents);
+                end
+            end
+        end
 
         if displaced_shelter==1 && ~isempty(HH_destroyed)
             [Build_Data, Shelters, Shelter_Assign, Shelter_Building_Routines, Building_routine_id, unsheltered_agents, newly_assigned] = ...
@@ -2081,6 +2148,7 @@ for i=1:steps
     n_tempdev_hh_track(i) = n_tempdev_hh_now;
     n_permanently_displaced_track(i) = n_permanently_displaced_total; % cumulative running total
     n_original_hh_permanently_displaced_track(i) = n_original_hh_permanently_displaced_total; % cumulative running total, original cohort only
+    total_aid_distributed_track(i) = total_aid_distributed; % cumulative running total
 
 end
 
@@ -2107,7 +2175,7 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             n_immediate_hh_track n_outside_hh_track n_tempdev_hh_track...
             n_permanently_displaced_total n_permanently_displaced_track...
             n_original_hh_permanently_displaced_total n_original_hh_permanently_displaced_track...
-            n_hh_subsidized_total total_aid_distributed n_businesses_subsidized_total businesses_subsidized_ever_ids...
+            n_hh_subsidized_total total_aid_distributed total_aid_distributed_track n_businesses_subsidized_total businesses_subsidized_ever_ids...
             rng_seed
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk),' ',run_uid]);
 save(full_file_name);

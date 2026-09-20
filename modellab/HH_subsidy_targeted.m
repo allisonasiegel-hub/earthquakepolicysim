@@ -49,6 +49,20 @@ function [HH_data, Individuals_data, HH_subsidy_tracker, n_hh_subsidized_total, 
 % amount (already summed across members, matches how it's added to
 % HH_data col 6 below). was_displaced_at_grant is always 1 for modes 5/6
 % (displaced-only); the column is kept for tracker-format stability.
+%
+% WAGE-YARDSTICK FIX (2026-09-20): the subsidy is added ONLY to HH_data
+% col 6 (household income - used for housing-search affordability, the
+% actual intended effect), NOT to Individuals_data col 14 (individual
+% income) as an earlier version also did. That earlier version fed
+% subsidized income straight into average_wage/std_wage (recomputed every
+% step from col 14 in run_model_earthquake_shelteroverflow.m) - the same
+% city-wide wage yardstick the land-use job-creation ranking uses
+% (pot_sal_for_B's potential-salary score, new job salary draws). Grep
+% confirmed col 14 has no other individual-level consumer in this script
+% besides that yardstick, so subsidizing it had no purpose except quietly
+% distorting which buildings clear the growth threshold - an Arad subsidy
+% sweep (2026-09-20) showed "jobs saved" vs. a no-subsidy baseline
+% negative in nearly every mode combo, traced to this leak.
 
     if subsidy_residents_mode > 0 && subsidy_residents_mode ~= 5 && subsidy_residents_mode ~= 6
         error('HH_subsidy_targeted:invalidMode', ...
@@ -91,11 +105,7 @@ function [HH_data, Individuals_data, HH_subsidy_tracker, n_hh_subsidized_total, 
                 subsidy_amount = 0;
             end
 
-            hh_size = max(HH_data(hh_row, 3), 1);
-            per_person = subsidy_amount / hh_size;
             HH_data(hh_idx, 6) = HH_data(hh_idx, 6) + subsidy_amount;
-            member_idx = Individuals_data(:,3) == hh_id;
-            Individuals_data(member_idx, 14) = Individuals_data(member_idx, 14) + per_person;
 
             HH_subsidy_tracker = [HH_subsidy_tracker; hh_id, i, subsidy_amount, double(is_displaced)];
             n_hh_subsidized_total = n_hh_subsidized_total + 1;
@@ -123,11 +133,7 @@ function [HH_data, Individuals_data, HH_subsidy_tracker, n_hh_subsidized_total, 
             left_world = ~any(hh_idx);
             if expired || left_world
                 if any(hh_idx)
-                    hh_size = max(HH_data(find(hh_idx, 1), 3), 1);
-                    per_person = subsidy_amount / hh_size;
                     HH_data(hh_idx, 6) = HH_data(hh_idx, 6) - subsidy_amount;
-                    member_idx = Individuals_data(:,3) == hh_id;
-                    Individuals_data(member_idx, 14) = Individuals_data(member_idx, 14) - per_person;
                 end
                 to_remove(k) = true;
             end
