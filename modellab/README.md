@@ -30,6 +30,8 @@ MATLAB, `run('<driver_name>.m')`, or open it and run from the editor.
 | Ashkelon | [`run_ashkelon_baseline_step25_150.m`](run_ashkelon_baseline_step25_150.m) | [`run_ashkelon_shock_step25_150.m`](run_ashkelon_shock_step25_150.m) |
 | Tiberias | [`run_tiberias_calibrated.m`](run_tiberias_calibrated.m) | [`run_tiberias_shock_step25_150.m`](run_tiberias_shock_step25_150.m) |
 | Jerusalem | [`run_jerusalem_calibrated.m`](run_jerusalem_calibrated.m) | — (not yet validated for a shock scenario) |
+| Arad | [`run_arad_baseline.m`](run_arad_baseline.m) | [`run_arad_shock_step100_250.m`](run_arad_shock_step100_250.m) — see "Arad-specific parameters" below, its land-use transient takes much longer to settle than the other cities |
+| Beer Sheva | [`run_beersheva_calibrated.m`](run_beersheva_calibrated.m) | — (no dedicated driver script yet; `shock_step=40` traced from a single baseline replicate — see Arad-specific parameters below) |
 
 Output saves to `earthquakeF/<prefix> EQ S <timestamp> <replicate#> <pid>.mat`.
 Re-running a driver adds more replicates on top of whatever's already there,
@@ -60,6 +62,7 @@ no-shock baseline drivers ([`run_ashkelon_baseline_step25_150.m`](run_ashkelon_b
 | `lu_update_every` | `1` | Land-use module runs every Nth step once past `lu_warmup` (raise to speed up a test run) |
 | `jobs_per_meter_multiplier` / `potential_jobs_per_meter_multiplier` / `lu_change_rank_lower` / `lu_change_rank_upper` | `1` / `1` / `20` / `40` | Land-use commercial-conversion multipliers/thresholds — Tiberias's own validated calibration is `3`/`2`/`45`/`85` (see Land-use conversion calibration) |
 | `RECOVERY` | `1-(1-0.3135)^(1/52)` (~0.72%/week) | Per-building weekly probability of reconstruction, applied uniformly across building types by default — only actually destroyed buildings are affected, so this is inert in a no-shock baseline |
+| `resSearchLen` | `4` | Max consecutive failed housing-search attempts a household tolerates before actually leaving the city — a flat baseline for every city (was a run-length-scaled formula, `round(steps*14/760)`, until chat 2026-09-20) |
 | `rng_seed` | unset (`rng('shuffle')`) | Pass a value to pin a specific random seed for reproducibility; omit for independent replicates |
 
 ### Baseline-only
@@ -80,6 +83,43 @@ no-shock baseline drivers ([`run_ashkelon_baseline_step25_150.m`](run_ashkelon_b
 | `n_sims` | `1` | Kept at 1 for shock scenarios specifically due to an unexplained `n_sims>=2`-in-one-process crash history — run multiple separate `matlab -batch` invocations instead to build up replicates |
 
 See "Policies and mechanisms" below for the reasoning behind each.
+
+### Arad-specific parameters
+
+Arad's land-use module takes noticeably longer to settle than Ashkelon's
+(~week 20-21) or Tiberias's (~week 8) — with both Arad-specific fixes
+applied ([`find_empty_buildings_arad.m`](find_empty_buildings_arad.m) and
+the `intraSAProb`/`intraYeshuvProb` daily-vs-weekly correction). Traced
+directly from a real no-shock baseline's `SA_SERVICE` (2026-09-20,
+correcting an earlier, inaccurate "week 16-20" estimate): the one-time
+activation jump (328→875 commercial buildings) happens by week 9, but
+growth keeps creeping upward gradually — unlike Ashkelon/Tiberias's
+sharper cutoff — until essentially flat (939-940, ±1 noise) around
+**week 85-90**. The validated Arad shock driver
+([`run_arad_shock_step100_250.m`](run_arad_shock_step100_250.m)) still
+clears this comfortably:
+
+| Parameter | Value | Why |
+|---|---|---|
+| `shock_step` | `100` | Past the ~week 85-90 full-settling point either way it's read — a much bigger margin than Ashkelon/Tiberias need, since Arad's transient is both later-settling and slower to flatten out |
+| `steps` | `250` | Long post-shock window (150 steps) on top of the later shock, so the full recovery trajectory plays out, not just the initial displacement wave |
+| `alfa` / `beta` / `lamda` / `delta` | `0.30` / `0.95` / `0.95` / `0.50` | Requested baseline values, kept the same between Arad's baseline and shock drivers for comparability — not independently calibrated against real outcome data the way Tiberias's land-use multipliers are |
+| `jobs_per_meter_multiplier` etc. | script defaults (`1`/`1`/`20`/`40`) | No Arad-specific land-use calibration exists yet — left untouched |
+
+Ashkelon/Tiberias/Jerusalem's shared `shock_step=25` default (see
+Shock-only above) is **not long enough for Arad** — using it would fire
+the shock before Arad's land-use transient has settled, confounding the
+two effects the same way an under-sized `shock_step` would for any city.
+
+**Beer Sheva**: traced the same way (2026-09-20) from a real no-shock
+baseline: activation jump (1248→6420) by week 9, essentially flat
+(~7042, ±1 noise) by **week 33-37**. `shock_step=25` — the value an
+earlier README pass assumed by analogy with Ashkelon/Tiberias — actually
+fires *before* that settling point; `shock_step=40` clears it with a
+similar margin to Ashkelon's. No dedicated Beer Sheva shock driver
+script exists yet, and this is based on a single baseline replicate
+(vs. Ashkelon/Tiberias's multi-replicate checks) — a reasonable working
+value, not as rigorously validated as the other cities.
 
 ---
 
@@ -314,7 +354,7 @@ household income for a fixed number of weeks:
 | Mode | Duration | Decile 7-10 | Decile 4-6 | Decile 1-3 |
 |---|---|---|---|---|
 | `5` | 4 weeks | 30% | 35% | 40% |
-| `6` | 8 weeks | 10% | 15% | 20% |
+| `6` | 12 weeks (3 months) | 10% | 15% | 20% |
 
 Both modes use a fixed duration regardless of the `subsidy_duration`
 setting elsewhere, and run their full window regardless of whether the

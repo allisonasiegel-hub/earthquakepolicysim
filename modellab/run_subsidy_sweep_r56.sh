@@ -1,6 +1,9 @@
 #!/bin/bash
 # Matched-seed sweep: mode 5 (4-week, decile-tiered 30/35/40%) and mode 6
-# (8-week, decile-tiered 10/15/20%) vs the (0,0) no-subsidy baseline.
+# (12-week/3-month, decile-tiered 10/15/20%) vs the (0,0) no-subsidy baseline.
+# (Mode 6 was 8 weeks until chat 2026-09-20, extended to match a 3-month
+# policy target - this script's own logic doesn't hardcode the duration,
+# it's read from HH_subsidy_targeted.m each run, so no other change needed here.)
 # Business subsidy off throughout (isolating the household-subsidy effect
 # only). 5 matched-seed replicates: same rng_seed reused across all 3
 # combos per replicate index, so combo-to-combo differences reflect the

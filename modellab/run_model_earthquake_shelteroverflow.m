@@ -446,10 +446,12 @@ sims=30;
 if ~exist('steps','var'); steps=200; end % allow a sweep driver to pre-set this for faster test runs
 % resSearchLen: max consecutive failed housing-search attempts before a HH
 % actually leaves the city (see HH_data col 13, set at load time above).
-% Ported from modelthesis/run_model_earthquake.m - default scales with run
-% length the same way it does there (14 fails tolerated over a 760-step
-% run). Overridable so a driver/sweep can test a different retry budget.
-if ~exist('resSearchLen','var'); resSearchLen=max(1,round(steps*14/760)); end
+% Ported from modelthesis/run_model_earthquake.m, which scales this with
+% run length (14 fails tolerated over a 760-step run). Fixed at a flat
+% baseline of 4 for every city instead (chat 2026-09-20) - not derived
+% from steps. Overridable so a driver/sweep can test a different retry
+% budget.
+if ~exist('resSearchLen','var'); resSearchLen=4; end
 % earthquake severity comes from the per-SA damage
 % table passed to earth_quake() instead, see the shock block below)
 shock=0;
@@ -573,16 +575,18 @@ n_temp_dev_sites=3; % fixed count - not derived from the destroyed-building set
 % fraction of the total currently-sheltered population (immediate tier +
 % out-of-city overflow) at the moment the sites open, split evenly across
 % n_temp_dev_sites. Not tied to any building's floor area - these aren't
-% buildings. Easily-tunable placeholder, not yet set through sensitivity
-% testing. Overridable (like city/steps/shock_step) so a caller can define
-% policy-comparison scenarios without editing this file:
-%   - "limited capacity" scenario: 0.75 (default below)
+% buildings. Overridable (like city/steps/shock_step) so a caller can
+% define policy-comparison scenarios without editing this file. Two
+% standard sheltering-policy options (chat 2026-09-20), used as one of
+% the 3 policy-category axes in the full multi-city policy sweep:
+%   - "limited capacity" scenario: 0.5 (default below)
 %   - "everyone gets sheltered" scenario: 1.0 - note the per-site greedy
 %     fill (see the transfer block below) isn't optimal bin-packing, so at
 %     very large populations a handful of people could still miss by a
 %     site-boundary rounding edge; negligible relative to typical
 %     population sizes.
-if ~exist('temp_dev_capacity_frac','var'); temp_dev_capacity_frac=0.75; end
+% Not yet set through sensitivity testing beyond these two named options.
+if ~exist('temp_dev_capacity_frac','var'); temp_dev_capacity_frac=0.5; end
 % temp_dev_site_coords: optional user-supplied [X,Y] real-world staging
 % locations, one row per site (n_temp_dev_sites x 2). Leave empty to fall
 % back to a data-driven siting proxy (see site_temp_dev_locations.m) -

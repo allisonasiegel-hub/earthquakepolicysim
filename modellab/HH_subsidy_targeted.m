@@ -34,10 +34,11 @@ function [HH_data, Individuals_data, HH_subsidy_tracker, n_hh_subsidized_total, 
 %   6 = displaced households only (same eligibility as mode 5). Amount:
 %       same decile-tier idea as mode 5, but smaller percentages and a
 %       longer window - decile 7-10 gets 10%, decile 4-6 gets 15%, decile
-%       1-3 gets 20%. Fixed 8-step duration, NOT subsidy_duration. No
-%       early exit.
-% Modes 5/6 use FIXED durations (4 and 8 steps respectively) regardless of
-% whatever subsidy_duration is set to.
+%       1-3 gets 20%. Fixed 12-step (3-month) duration, NOT
+%       subsidy_duration - was 8 steps until chat 2026-09-20, extended to
+%       match a 3-month policy target. No early exit.
+% Modes 5/6 use FIXED durations (4 and 12 steps respectively) regardless
+% of whatever subsidy_duration is set to.
 %
 % Housing-cost lookup: Assets/bad_Assets col 13 ("cost of life" - see
 % monthly_ass_cost.m). A displaced household's cost is read from
@@ -120,7 +121,7 @@ function [HH_data, Individuals_data, HH_subsidy_tracker, n_hh_subsidized_total, 
         if subsidy_residents_mode == 5
             effective_duration = 4;
         elseif subsidy_residents_mode == 6
-            effective_duration = 8;
+            effective_duration = 12;
         end
 
         to_remove = false(size(HH_subsidy_tracker,1),1);

@@ -52,7 +52,7 @@ fprintf('=== Mode 5 fixed-duration test at step 44 (40+4, should have expired) =
 assert(isempty(tracker5b), 'mode 5 should use its own fixed 4-step duration, not subsidy_duration=9 - expired by step 44');
 fprintf('PASS: mode 5 grants decile-tiered amounts and expires at its own fixed 4-step duration.\n\n');
 
-%% --- mode 6: displaced only, decile-tiered % of housing cost, fixed 8-step duration ---
+%% --- mode 6: displaced only, decile-tiered % of housing cost, fixed 12-step (3-month) duration ---
 subsidy_residents_mode6 = 6;
 tracker6 = zeros(0,4);
 n_hh6 = 0; aid6 = 0;
@@ -61,12 +61,12 @@ fprintf('=== Mode 6 grant test (hh1 decile1->20%%, hh2 decile5->15%%) ===\n'); d
 assert(abs(HH_data_m6(HH_data_m6(:,2)==1,6) - (5000+0.20*2500)) < 1e-9, 'hh1 (decile 1, low tier) should get 20% of 2500 = 500');
 assert(abs(HH_data_m6(HH_data_m6(:,2)==2,6) - (8000+0.15*6000)) < 1e-9, 'hh2 (decile 5, middle tier) should get 15% of 6000 = 900');
 
-% Should still be active at step 47 (40+7 < 40+8) but expired by step 48 (40+8).
-[~, ~, tracker6_wk47, ~, ~] = HH_subsidy_targeted(HH_data_m6, Individuals_data, [], tracker6, Assets, bad_Assets, Shelter_Assign_m3grant, Sheltered_Outside, Temp_Dev_Assign, subsidy_residents_mode6, subsidy_duration, 47, n_hh6, aid6);
-[~, ~, tracker6_wk48, ~, ~] = HH_subsidy_targeted(HH_data_m6, Individuals_data, [], tracker6, Assets, bad_Assets, Shelter_Assign_m3grant, Sheltered_Outside, Temp_Dev_Assign, subsidy_residents_mode6, subsidy_duration, 48, n_hh6, aid6);
-assert(~isempty(tracker6_wk47), 'mode 6 should still be active at step 47 (only 7 of its 8 steps elapsed)');
-assert(isempty(tracker6_wk48), 'mode 6 should have expired by step 48 (40+8), its own fixed duration');
-fprintf('PASS: mode 6 grants decile-tiered amounts and expires at its own fixed 8-step duration.\n\n');
+% Should still be active at step 51 (40+11 < 40+12) but expired by step 52 (40+12).
+[~, ~, tracker6_wk51, ~, ~] = HH_subsidy_targeted(HH_data_m6, Individuals_data, [], tracker6, Assets, bad_Assets, Shelter_Assign_m3grant, Sheltered_Outside, Temp_Dev_Assign, subsidy_residents_mode6, subsidy_duration, 51, n_hh6, aid6);
+[~, ~, tracker6_wk52, ~, ~] = HH_subsidy_targeted(HH_data_m6, Individuals_data, [], tracker6, Assets, bad_Assets, Shelter_Assign_m3grant, Sheltered_Outside, Temp_Dev_Assign, subsidy_residents_mode6, subsidy_duration, 52, n_hh6, aid6);
+assert(~isempty(tracker6_wk51), 'mode 6 should still be active at step 51 (only 11 of its 12 steps elapsed)');
+assert(isempty(tracker6_wk52), 'mode 6 should have expired by step 52 (40+12), its own fixed duration');
+fprintf('PASS: mode 6 grants decile-tiered amounts and expires at its own fixed 12-step (3-month) duration.\n\n');
 
 %% --- cal_bui_sa_subsidy_targeted: modes 1/2/3 ---
 % Work_places cols: 1=building id, 8=salary
