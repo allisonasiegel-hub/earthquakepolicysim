@@ -83,6 +83,49 @@ See "Policies and mechanisms" below for the reasoning behind each.
 
 ---
 
+## Output data
+
+### How to generate it
+
+Run any driver script from Quick Start above (`run('<driver_name>.m')`), or
+set `city`/`shock_step`/etc. directly and call
+`run('run_model_earthquake_shelteroverflow.m')` yourself. Each simulation
+replicate saves one `.mat` file to `earthquakeF\<prefix> EQ S
+<run_timestamp> <replicate#> <run_uid>.mat` (`<prefix>` comes from the
+loaded dataset's own name, e.g. `Ash2hotels`, `hotels` for Tiberias,
+`Aradhotels`) via a plain `save(full_file_name)` at the very end of the
+run — no separate export step needed. Re-running a driver adds new files
+on top of whatever's already in `earthquakeF\`, it never overwrites
+earlier replicates, so that folder accumulates every run ever made until
+manually cleaned up.
+
+### What's covered
+
+Right before saving, the script clears everything except a fixed
+whitelist of variables (`clearvars -except ...`) — that whitelist *is*
+the complete contents of every output file:
+
+| Group | Variables |
+|---|---|
+| Full agent-level state (end-of-run snapshot) | `Assets`, `Build_Data`, `HH_data`, `Individuals_data`, `Work_places` (plus each one's `_P`/`_p` pre-run copy, for before/after comparison) |
+| City-wide macro time series (30 `SA_*` variables, one row per SA, one column per step) | `SA_POP`, `SA_PRICE`, `SA_WAGE`, `SA_WP` (workplace/job count — see "jobs saved" in the Subsidies section), `SA_SERVICE` (commercial building count), `SA_RESIDENT`, `SA_HOUSE`, `SA_COMERCIAL`, `SA_IDLE`, `SA_LOCAL`, `SA_WORKING`, `SA_JOBS`, `SA_OUTCOME`, `SA_AREA`, `SA_FIRST`…`SA_TENTH` (income-decile shares) |
+| Shelter & displacement outcomes | `n_immediate_hh_max/_final/_track`, `n_outside_hh_max/_final/_track`, `n_tempdev_hh_max/_final/_track`, `n_permanently_displaced_total/_track`, `n_original_hh_permanently_displaced_total/_track`, `Shelters`, `Shelter_Assign`, `Sheltered_Outside`, `LU_Displaced`, `Temp_Dev_Sites`, `Temp_Dev_Assign` |
+| Building reconstruction | `n_destroyed_total`, `n_reconstructed_final`, `destroyed_B`, `bad_Assets`, `RECOVERY` |
+| Subsidy outcomes (see "Subsidies" below) | `n_hh_subsidized_total`, `total_aid_distributed`, `total_aid_distributed_track`, `n_businesses_subsidized_total`, `businesses_subsidized_ever_ids`, `HH_track` |
+| Run configuration (for provenance/reproducibility) | `city`, `shock_step`, `steps`, `run_timestamp`, `rng_seed`, `subsidy_residents_mode`, `subsidy_businesses_mode`, `subsidy_duration`, plus every calibration/policy parameter from the Standard Parameters tables above (`alfa`/`beta`/`lamda`/`delta`, `JobsPerM_comm`, land-use multipliers, `resSearchLen`, shelter/patience/temp-dev parameters, etc.) |
+
+`_max`/`_final`/`_track` follow one convention throughout: `_max` is the
+single largest value reached over the whole run, `_final` is the value at
+the last step, `_track` is the full per-step series (only present for
+shock scenarios where the underlying mechanic actually fires — a
+no-shock baseline still saves them, just as all-zero/flat series).
+
+Load a file directly in MATLAB (`load('earthquakeF\...mat')`) to inspect
+any of this by hand, or use `plot_macro_comparison.py` below for a
+ready-made report across one or more files.
+
+---
+
 ## Standard output
 
 To generate a standard report from one or more runs, use
