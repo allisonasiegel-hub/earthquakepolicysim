@@ -44,7 +44,7 @@ for i=1:length(u)
     
     want_work=datasample(labor_force,round(length(labor_force).*stat_Labor_Force(i)/100),'replace',false,'Weights',weights);
     s_data(want_work,12)=1;
-    work=datasample(want_work,round(length(want_work).*stat_Labor_work(i)/100),'replace',false);
+    work=datasample(labor_force,round(length(want_work).*stat_Labor_work(i)/100),'replace',false);
     s_data(work,12)=2;
     
     %% income

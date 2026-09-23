@@ -68,7 +68,7 @@ assert(~isempty(tracker6_wk51), 'mode 6 should still be active at step 51 (only 
 assert(isempty(tracker6_wk52), 'mode 6 should have expired by step 52 (40+12), its own fixed duration');
 fprintf('PASS: mode 6 grants decile-tiered amounts and expires at its own fixed 12-step (3-month) duration.\n\n');
 
-%% --- cal_bui_sa_subsidy_targeted: modes 1/2/3 ---
+%% --- cal_bui_sa_subsidy_targeted: modes 1/2 ---
 % Work_places cols: 1=building id, 8=salary
 Work_places = [ ...
     10, 0,0,0,0,0,0, 100; ... % building 10: 1 worker, salary 100 (destroyed, only 2 workers total)
@@ -95,7 +95,7 @@ destroyed_commercial_B0 = destroyed_B;
 % dropping the 2 lowest (50,80) leaves [200,300] = 500 still counted
 % (PARTIAL coverage - this is the case the old zero-everything version
 % couldn't distinguish from full coverage).
-[r1, n_biz1, biz_ids1] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 1, 0, []);
+[r1, n_biz1, biz_ids1, ~] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 1, 0, [], [], 1);
 fprintf('=== Business mode 1 (destroyed only) ===\n'); disp(r1);
 assert(r1(r1(:,1)==10,2) == 0, 'building 10 (destroyed, 2 workers) should be fully covered (both dropped)');
 assert(r1(r1(:,1)==20,2) == 200, 'building 20 (not destroyed) should be untouched');
@@ -114,7 +114,7 @@ assert(r1(r1(:,1)==40,3) == 630, 'building 40 original wage sum should be 50+80+
 % Counts: b10=2, b20=1, b30=3, b40=4. 30th percentile of [2,1,3,4] should
 % select building 20 (headcount 1, smallest) on the size side; buildings
 % 10 and 40 also qualify via the destroyed side.
-[r2, n_biz2, biz_ids2] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 2, 0, []);
+[r2, n_biz2, biz_ids2, ~] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 2, 0, [], [], 1);
 fprintf('=== Business mode 2 (destroyed UNION smallest 30%% by headcount) ===\n'); disp(r2);
 assert(r2(r2(:,1)==10,2) == 0, 'building 10 (destroyed) should be fully covered under mode 2');
 assert(r2(r2(:,1)==20,2) == 200, 'building 20 qualifies by size but has only 1 worker so the >1-worker guard keeps it un-zeroed');
@@ -135,9 +135,49 @@ Build_Data_lu = [Build_Data; 50,0,3,0]; % now commercial (post-conversion)
 destroyed_B_lu = [destroyed_B; 50,0,0]; % still tracked as destroyed
 % destroyed_commercial_B0 deliberately does NOT include building 50 -
 % it was residential (usage~=3) at shock time, not commercial.
-[r3, ~, biz_ids3] = cal_bui_sa_subsidy_targeted(Work_places_lu, Build_Data_lu, destroyed_B_lu, destroyed_commercial_B0, 1, 0, []);
+[r3, ~, biz_ids3, ~] = cal_bui_sa_subsidy_targeted(Work_places_lu, Build_Data_lu, destroyed_B_lu, destroyed_commercial_B0, 1, 0, [], [], 1);
 assert(r3(r3(:,1)==50,2) == 300, 'building 50 (destroyed-but-not-originally-commercial) must be untouched: 120+180=300, no wage-bill suppression');
 assert(~ismember(50, biz_ids3), 'building 50 must never be counted as a subsidized business');
 fprintf('PASS: a building destroyed while residential and later converted to commercial via land-use is correctly excluded from destroyed-business eligibility.\n\n');
+
+%% --- cal_bui_sa_subsidy_targeted: modes 3/4 (fixed-duration, chat 2026-09-22) ---
+% Reuse the same Work_places/Build_Data/destroyed_B/destroyed_commercial_B0
+% synthetic setup as modes 1/2 above (buildings 10/40 destroyed-and-
+% originally-commercial, 20/30 not destroyed).
+
+% mode 3: entire wage bill zeroed while tracked, starting at step 40.
+[r3a, n_biz3a, biz_ids3a, tracker3a] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 3, 0, [], [], 40);
+fprintf('=== Business mode 3 (destroyed only, full wage-bill zeroed) step 40 ===\n'); disp(r3a);
+assert(r3a(r3a(:,1)==10,2) == 0, 'building 10 (destroyed) should be fully zeroed under mode 3');
+assert(r3a(r3a(:,1)==40,2) == 0, 'building 40 (destroyed, 4 workers) should ALSO be fully zeroed under mode 3, unlike mode 1''s partial coverage');
+assert(r3a(r3a(:,1)==20,2) == 200, 'building 20 (not destroyed) should be untouched');
+assert(isequal(sort(tracker3a(:,1)), [10;40]), 'mode 3 tracker should register buildings 10 and 40, both starting at step 40');
+assert(n_biz3a == 2, 'cumulative subsidized-business count should be 2');
+
+% Still within the fixed 4-step (1-month) window at step 43 (40+3<40+4).
+[r3b, ~, ~, tracker3b] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 3, n_biz3a, biz_ids3a, tracker3a, 43);
+assert(r3b(r3b(:,1)==10,2) == 0, 'mode 3 should still be zeroing building 10 at step 43 (3 of 4 steps elapsed)');
+assert(~isempty(tracker3b), 'mode 3 tracker should still hold entries at step 43');
+
+% Expired by step 44 (40+4) - even though the building is STILL destroyed
+% (destroyed_B unchanged), the fixed window has ended, so it reverts to
+% its real wage bill (no early exit, but no extension either - see header).
+[r3c, ~, ~, ~] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 3, n_biz3a, biz_ids3a, tracker3a, 44);
+assert(r3c(r3c(:,1)==10,2) == 250, 'building 10 should be back to its real wage bill (100+150=250) once mode 3''s fixed 4-step window expires');
+fprintf('PASS: mode 3 zeros the whole wage bill for a fixed 4-step window, then reverts.\n\n');
+
+% mode 4: half the wage bill counted while tracked, starting at step 40.
+[r4a, n_biz4a, biz_ids4a, tracker4a] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 4, 0, [], [], 40);
+fprintf('=== Business mode 4 (destroyed only, half wage-bill counted) step 40 ===\n'); disp(r4a);
+assert(r4a(r4a(:,1)==10,2) == 125, 'building 10 (100+150=250) should count as half (125) under mode 4');
+assert(r4a(r4a(:,1)==40,2) == 315, 'building 40 (50+80+200+300=630) should count as half (315) under mode 4');
+assert(r4a(r4a(:,1)==20,2) == 200, 'building 20 (not destroyed) should be untouched');
+
+% Still active at step 51 (40+11<40+12), expired by step 52 (40+12).
+[r4b, ~, ~, tracker4b] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 4, n_biz4a, biz_ids4a, tracker4a, 51);
+assert(r4b(r4b(:,1)==10,2) == 125, 'mode 4 should still be halving building 10''s wage bill at step 51 (11 of 12 steps elapsed)');
+[r4c, ~, ~, ~] = cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, 4, n_biz4a, biz_ids4a, tracker4a, 52);
+assert(r4c(r4c(:,1)==10,2) == 250, 'building 10 should be back to its real wage bill (250) once mode 4''s fixed 12-step window expires');
+fprintf('PASS: mode 4 halves the wage bill for a fixed 12-step (3-month) window, then reverts.\n\n');
 
 fprintf('\nALL TESTS PASSED\n');

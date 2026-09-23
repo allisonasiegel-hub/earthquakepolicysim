@@ -51,19 +51,17 @@ function [HH_data, Individuals_data, HH_subsidy_tracker, n_hh_subsidized_total, 
 % HH_data col 6 below). was_displaced_at_grant is always 1 for modes 5/6
 % (displaced-only); the column is kept for tracker-format stability.
 %
-% WAGE-YARDSTICK FIX (2026-09-20): the subsidy is added ONLY to HH_data
-% col 6 (household income - used for housing-search affordability, the
-% actual intended effect), NOT to Individuals_data col 14 (individual
-% income) as an earlier version also did. That earlier version fed
-% subsidized income straight into average_wage/std_wage (recomputed every
-% step from col 14 in run_model_earthquake_shelteroverflow.m) - the same
-% city-wide wage yardstick the land-use job-creation ranking uses
-% (pot_sal_for_B's potential-salary score, new job salary draws). Grep
-% confirmed col 14 has no other individual-level consumer in this script
-% besides that yardstick, so subsidizing it had no purpose except quietly
-% distorting which buildings clear the growth threshold - an Arad subsidy
-% sweep (2026-09-20) showed "jobs saved" vs. a no-subsidy baseline
-% negative in nearly every mode combo, traced to this leak.
+% WAGE-YARDSTICK FIX REVERTED (chat 2026-09-22, on request): the
+% 2026-09-20 fix that added the subsidy ONLY to HH_data col 6, not to
+% Individuals_data col 14, has been undone - every household member's
+% individual income is bumped by the same subsidy_amount again, matching
+% the original shared HH_subsidy.m (rocketattack/RABM-matlab) pattern.
+% This does feed subsidized income into average_wage/std_wage
+% (recomputed every step from col 14 in
+% run_model_earthquake_shelteroverflow.m), the same city-wide yardstick
+% the land-use job-creation ranking uses - see the fix's own writeup
+% (git history / chat 2026-09-20) for what that distorts. Deliberately
+% restored anyway per chat 2026-09-22.
 
     if subsidy_residents_mode > 0 && subsidy_residents_mode ~= 5 && subsidy_residents_mode ~= 6
         error('HH_subsidy_targeted:invalidMode', ...
@@ -107,6 +105,8 @@ function [HH_data, Individuals_data, HH_subsidy_tracker, n_hh_subsidized_total, 
             end
 
             HH_data(hh_idx, 6) = HH_data(hh_idx, 6) + subsidy_amount;
+            member_idx = Individuals_data(:,3) == hh_id;
+            Individuals_data(member_idx, 14) = Individuals_data(member_idx, 14) + subsidy_amount;
 
             HH_subsidy_tracker = [HH_subsidy_tracker; hh_id, i, subsidy_amount, double(is_displaced)];
             n_hh_subsidized_total = n_hh_subsidized_total + 1;
@@ -135,6 +135,8 @@ function [HH_data, Individuals_data, HH_subsidy_tracker, n_hh_subsidized_total, 
             if expired || left_world
                 if any(hh_idx)
                     HH_data(hh_idx, 6) = HH_data(hh_idx, 6) - subsidy_amount;
+                    member_idx = Individuals_data(:,3) == hh_id;
+                    Individuals_data(member_idx, 14) = Individuals_data(member_idx, 14) - subsidy_amount;
                 end
                 to_remove(k) = true;
             end

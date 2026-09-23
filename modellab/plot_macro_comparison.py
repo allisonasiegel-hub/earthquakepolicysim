@@ -159,7 +159,21 @@ def full_label(v, label, detail, derived):
 
 
 SMOOTH_WINDOW = 7  # steps = weeks; ~1 quarter smoothing
-COLORS = ['tab:green', 'tab:blue', 'tab:orange', 'tab:red', 'tab:purple']
+COLORS = ['tab:green', 'tab:blue', 'tab:orange', 'tab:red', 'tab:purple',
+          'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']
+# NOTE (chat 2026-09-23): plot_grid/plot_pdf_and_pngs's per-variable charts
+# build their color mapping via zip(macros, labels, COLORS) - zip() silently
+# truncates to the SHORTEST of the three, so with more scenario labels than
+# COLORS entries, the extra scenario(s) just vanish from those specific
+# charts (not an error, not visible in the output at all) rather than
+# reusing a color like every other COLORS consumer in this file (which all
+# index via `idx % len(COLORS)`). Found via a 6-scenario comparison where
+# the 6th scenario was silently missing from macro_trends.png/.pdf while
+# present in shelter_tiers.png/total_sheltered.png/permanent_displacement.png/
+# aid_distributed.png. Widened to 10 colors as a fix; if a comparison ever
+# exceeds 10 scenarios, the same silent-drop will recur for #11+ unless
+# COLORS is widened again or those two call sites switch to modulo indexing
+# like the rest.
 
 # Scalar shelter/reconstruction outcomes saved by
 # run_model_earthquake_shelteroverflow.m (added alongside the SA_* trends -
@@ -202,6 +216,19 @@ SUBSIDY_VARS = [
     ('n_hh_subsidized_total', 'Households subsidized (cumulative)'),
     ('total_aid_distributed', 'Total aid distributed ($, by end of sim)'),
     ('n_businesses_subsidized_total', 'Businesses subsidized (cumulative)'),
+    # jobs_subsidized/final_jobs/final_avg_wage/final_n_working (chat
+    # 2026-09-23): DERIVED, not saved directly under these names -
+    # load_subsidy_outcomes computes them from SA_WP/Individuals_data/
+    # Work_places/businesses_subsidized_ever_ids. Same metrics as
+    # analyze_subsidy_sweep.py's "Jobs subsidized" and absolute-value
+    # table (see that script's header docstring for exact definitions
+    # and caveats - e.g. final_avg_wage only excludes the household
+    # subsidy's effect on individual income when subsidy_residents_mode
+    # is off for every scenario being compared).
+    ('jobs_subsidized', 'Jobs subsidized (current jobs @ ever-subsidized bldgs)'),
+    ('final_jobs', 'Final total jobs, city-wide (SA_WP)'),
+    ('final_avg_wage', 'Final average wage (working residents)'),
+    ('final_n_working', 'Final # working residents'),
 ]
 
 # Per-step cumulative aid track (chat 2026-09-19), same one-mat-per-
@@ -356,15 +383,49 @@ def load_shelter_tracks(files):
     return tracks, shock_step, temp_dev_delay
 
 
+_SUBSIDY_DERIVED_VARS = {'jobs_subsidized', 'final_jobs', 'final_avg_wage', 'final_n_working'}
+_SUBSIDY_RAW_VARS = [v for v, _ in SUBSIDY_VARS if v not in _SUBSIDY_DERIVED_VARS]
+
+
 def load_subsidy_outcomes(files):
     """Same pattern as load_shelter_outcomes, for SUBSIDY_VARS: dict var ->
     1D per-replicate scalar array, NaN for a file saved before that
-    variable existed."""
+    variable existed. jobs_subsidized/final_jobs/final_avg_wage/
+    final_n_working (chat 2026-09-23) are DERIVED from SA_WP/
+    Individuals_data/Work_places/businesses_subsidized_ever_ids rather
+    than loaded directly - see SUBSIDY_VARS' comment and
+    analyze_subsidy_sweep.py's header docstring for exact definitions."""
     out = {v: [] for v, _ in SUBSIDY_VARS}
+    want = _SUBSIDY_RAW_VARS + ['SA_WP', 'Individuals_data', 'Work_places', 'businesses_subsidized_ever_ids']
     for f in files:
-        m = sio.loadmat(f, variable_names=[v for v, _ in SUBSIDY_VARS], simplify_cells=True)
-        for v, _ in SUBSIDY_VARS:
+        m = sio.loadmat(f, variable_names=want, simplify_cells=True)
+        for v in _SUBSIDY_RAW_VARS:
             out[v].append(float(m[v]) if v in m else np.nan)
+
+        final_jobs = np.nan
+        if 'SA_WP' in m:
+            sa_wp = np.atleast_2d(np.asarray(m['SA_WP'], dtype=float))
+            final_jobs = float(sa_wp[:, -1].sum())
+        out['final_jobs'].append(final_jobs)
+
+        avg_wage = np.nan
+        n_working = np.nan
+        if 'Individuals_data' in m:
+            ind = np.asarray(m['Individuals_data'])
+            working = (ind[:, 14] > 0) & (ind[:, 14] != 99)  # col15 work_place_id, col15 commuter code 99
+            n_working = float(working.sum())
+            if working.sum() > 0:
+                avg_wage = float(ind[working, 13].mean())  # col14 income
+        out['final_avg_wage'].append(avg_wage)
+        out['final_n_working'].append(n_working)
+
+        jobs_subsidized = np.nan
+        if 'Work_places' in m and 'businesses_subsidized_ever_ids' in m:
+            biz_ids = np.atleast_1d(np.asarray(m['businesses_subsidized_ever_ids'], dtype=float)).flatten()
+            wp = np.asarray(m['Work_places'])
+            jobs_subsidized = float(np.isin(wp[:, 0], biz_ids).sum()) if biz_ids.size > 0 else 0.0
+        out['jobs_subsidized'].append(jobs_subsidized)
+
     return {v: np.array(vals) for v, vals in out.items()}
 
 
@@ -389,6 +450,124 @@ def load_aid_track(files):
         return np.array([]), shock_step, temp_dev_delay
     n = min(len(a) for a in arrs)
     return np.array([a[:n] for a in arrs]), shock_step, temp_dev_delay
+
+
+def load_seeds(files):
+    """Returns a list of rng_seed values, one per replicate file (chat
+    2026-09-23, for the report title page) - None for a file saved before
+    rng_seed was added to the save list, so the title page can still
+    report a replicate count even when the seed itself is unknown."""
+    seeds = []
+    for f in files:
+        m = sio.loadmat(f, variable_names=['rng_seed'], simplify_cells=True)
+        seeds.append(int(m['rng_seed']) if 'rng_seed' in m else None)
+    return seeds
+
+
+def load_scenario_meta(files):
+    """Returns (city, steps, shock_step) read from the first replicate
+    file (chat 2026-09-23, for the title page) - assumed consistent
+    across replicates of one scenario. None for any field missing from a
+    file saved before it was added to the save list."""
+    m = sio.loadmat(files[0], variable_names=['city', 'steps', 'shock_step'], simplify_cells=True)
+    city = str(m['city']) if 'city' in m else None
+    steps = int(m['steps']) if 'steps' in m else None
+    shock_step = float(m['shock_step']) if 'shock_step' in m else None
+    return city, steps, shock_step
+
+
+def build_title_page_figure(title_suffix, scenario_info, show_pattern=True):
+    """First page of the PDF (chat 2026-09-23): report title plus, per
+    scenario, its plain-English description (what --desc was passed, if
+    any - e.g. "mode 3" is meaningless on its own, this is where "1-month
+    subsidy, full wage bill covered" lives, so the rest of the report can
+    just say "mode 3" everywhere else per chat 2026-09-23), the city,
+    step count, and shock week, the glob pattern it came from, its
+    replicate count, and the exact seeds used - so the report is self-
+    describing about how much data backs it without having to go dig
+    through a manifest CSV.
+    show_pattern=False drops the Pattern column (chat 2026-09-23) - useful
+    when scenario_info's "pattern" isn't a real reusable glob (e.g. an
+    explicit-file-list caller that just concatenated filenames there),
+    where the column is more clutter than signal. Defaults to True,
+    unchanged for existing CLI callers.
+    scenario_info: list of (label, pattern, n_replicates, seeds, desc,
+    city, steps, shock_step) - shock_step display collapses to "no shock"
+    whenever it's None or falls at/beyond the run length (the model's own
+    convention for "never fires" - see run_model_earthquake_
+    shelteroverflow.m's shock_step=900 default)."""
+    row_labels = [label for label, *_ in scenario_info]
+    base_cols = ['Description', 'City', 'Steps', 'Shock week']
+    col_labels = base_cols + ['Pattern', 'Replicates', 'Seeds'] if show_pattern else base_cols + ['Replicates', 'Seeds']
+    cell_text = []
+    for _, pattern, n_rep, seeds, desc, city, steps, shock_step in scenario_info:
+        if seeds and all(s is not None for s in seeds):
+            seeds_str = ', '.join(str(s) for s in seeds)
+        elif seeds and any(s is not None for s in seeds):
+            seeds_str = ', '.join(str(s) if s is not None else '?' for s in seeds)
+        else:
+            seeds_str = 'n/a (predates rng_seed save)'
+        if shock_step is None or steps is None or shock_step >= steps:
+            shock_str = 'no shock'
+        else:
+            shock_str = f'week {int(shock_step)}'
+        row = [desc or '-', city or '?', str(steps) if steps is not None else '?', shock_str]
+        if show_pattern:
+            row.append(f'{pattern}*.mat')
+        row += [str(n_rep), seeds_str]
+        cell_text.append(row)
+    fig, ax = plt.subplots(figsize=(max(12, 3 * len(col_labels) + 4), 1.6 + 0.6 * len(scenario_info)))
+    ax.axis('off')
+    tbl = ax.table(cellText=cell_text, rowLabels=row_labels, colLabels=col_labels, loc='center', cellLoc='left')
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9.5)
+    tbl.scale(1, 1.9)
+    tbl.auto_set_column_width(col=list(range(len(col_labels))))
+    for (r, c), cell in tbl.get_celld().items():
+        if r == 0 or c == -1:
+            cell.set_text_props(weight='bold')
+            cell.set_facecolor('#eeeeee')
+    ax.set_title(f'Macro-economic comparison report{title_suffix}\n'
+                 f'Generated {__import__("datetime").datetime.now():%Y-%m-%d %H:%M}',
+                 fontsize=13, pad=20)
+    fig.tight_layout()
+    return fig
+
+
+def load_step_markers(files):
+    """Returns (shock_step, lu_warmup) for one scenario, read from its
+    first replicate file (chat 2026-09-23) - for the thin shock/land-use-
+    warmup vertical reference lines drawn on every macro trend chart.
+    shock_step defaults to 900 in the model script when never overridden
+    (run_model_earthquake_shelteroverflow.m) - callers must still check it
+    falls within the plotted step range before drawing it, since a
+    no-shock baseline's shock_step is saved but never actually fires.
+    lu_warmup (the step land-use/business updates start, i>lu_warmup)
+    falls back to 4 - the model's own hardcoded default - for files saved
+    before lu_warmup was added to the save list."""
+    if not files:
+        return None, 4.0
+    m = sio.loadmat(files[0], variable_names=['shock_step', 'lu_warmup'], simplify_cells=True)
+    shock_step = float(m['shock_step']) if 'shock_step' in m else None
+    lu_warmup = float(m['lu_warmup']) if 'lu_warmup' in m else 4.0
+    return shock_step, lu_warmup
+
+
+def _draw_step_markers(ax, markers_by_label, max_step):
+    """Thin reference lines shared by plot_grid and the per-variable PDF
+    pages (chat 2026-09-23): a dotted line where the land-use/business
+    module activates (lu_warmup) and a solid line where the shock fires
+    (shock_step) - each drawn once per DISTINCT value actually in range,
+    so scenarios sharing the same shock_step/lu_warmup (the common case)
+    don't stack duplicate lines. A no-shock scenario's shock_step (saved
+    as the unfired default, usually 900) is excluded by the max_step
+    check below."""
+    lu_vals = sorted({lu for _, lu in markers_by_label.values() if lu is not None and lu < max_step})
+    for lu in lu_vals:
+        ax.axvline(lu, color='dimgray', linestyle=':', linewidth=0.8, alpha=0.6, zorder=0)
+    shock_vals = sorted({s for s, _ in markers_by_label.values() if s is not None and s < max_step})
+    for s in shock_vals:
+        ax.axvline(s, color='dimgray', linestyle='-', linewidth=0.8, alpha=0.6, zorder=0)
 
 
 def _mean_std(a):
@@ -432,12 +611,30 @@ def _prepare_shelter_plot(scenario_tracks):
     return plotted, window_start, window_end, mask, steps_full, multi
 
 
-def _draw_shock_markers(ax, shock_step, temp_dev_delay):
-    ax.axvline(shock_step, color='gray', linestyle='--', alpha=0.5, label=f'Shock (week {int(shock_step)})')
+def _draw_shock_markers(ax, shock_step, temp_dev_delay, seen_labels=None):
+    """seen_labels: optional set, mutated in place (chat 2026-09-23) - a
+    legend label is only attached the FIRST time a given shock/temp-dev-
+    open week is drawn, not once per scenario plotted on the same axes.
+    Every scenario in one comparison typically shares the same shock
+    config, so without this the legend would show one duplicate "Shock
+    (week N)"/"Temp-dev opens (week N)" entry per scenario instead of one
+    total. The line itself is still drawn every time (just unlabeled after
+    the first), so multiple distinct shock weeks across scenarios that
+    genuinely differ still each get their own legend entry."""
+    shock_label = f'Shock (week {int(shock_step)})'
+    already_shock = seen_labels is not None and shock_label in seen_labels
+    ax.axvline(shock_step, color='gray', linestyle='--', alpha=0.5,
+               label=None if already_shock else shock_label)
+    if seen_labels is not None:
+        seen_labels.add(shock_label)
     if temp_dev_delay is not None:
         opens_at = shock_step + temp_dev_delay
+        opens_label = f'Temp-dev opens (week {int(opens_at)})'
+        already_opens = seen_labels is not None and opens_label in seen_labels
         ax.axvline(opens_at, color='black', linewidth=2.8, alpha=0.85,
-                   label=f'Temp-dev opens (week {int(opens_at)})')
+                   label=None if already_opens else opens_label)
+        if seen_labels is not None:
+            seen_labels.add(opens_label)
 
 
 def build_total_sheltered_fig(prepared, title_suffix):
@@ -446,6 +643,7 @@ def build_total_sheltered_fig(prepared, title_suffix):
     standalone PNG and plot_pdf_and_pngs' PDF page."""
     plotted, window_start, window_end, mask, steps_full, multi = prepared
     fig, ax = plt.subplots(figsize=(9, 5))
+    seen_labels = set()
     for idx, (label, imm, out_, tmp, perm, shock_step, temp_dev_delay, n_steps) in enumerate(plotted):
         total = imm + out_ + tmp
         m = min(mask.size, n_steps)
@@ -457,7 +655,7 @@ def build_total_sheltered_fig(prepared, title_suffix):
                  label=f'Total currently sheltered{f" -- {label}" if multi else ""}')
         ax.fill_between(sub_steps, np.clip(dm[:m][sub_mask] - ds[:m][sub_mask], 0, None),
                          dm[:m][sub_mask] + ds[:m][sub_mask], color=color, alpha=0.15)
-        _draw_shock_markers(ax, shock_step, temp_dev_delay)
+        _draw_shock_markers(ax, shock_step, temp_dev_delay, seen_labels)
     ax.set_xlabel('Week')
     ax.set_ylabel('Households currently sheltered (any location)')
     ax.set_xlim(window_start, window_end)
@@ -474,6 +672,7 @@ def build_permanent_displacement_fig(prepared, title_suffix):
     plot_pdf_and_pngs' PDF page."""
     plotted, window_start, window_end, mask, steps_full, multi = prepared
     fig, ax = plt.subplots(figsize=(9, 5.5))
+    seen_labels = set()
     for idx, (label, imm, out_, tmp, perm, shock_step, temp_dev_delay, n_steps) in enumerate(plotted):
         if perm.size == 0:
             continue
@@ -486,7 +685,7 @@ def build_permanent_displacement_fig(prepared, title_suffix):
                  label=f'Cumulative permanently displaced{f" -- {label}" if multi else " (mean)"}')
         ax.fill_between(sub_steps, np.clip(dm[:m][sub_mask] - ds[:m][sub_mask], 0, None),
                          dm[:m][sub_mask] + ds[:m][sub_mask], color=color, alpha=0.18)
-        _draw_shock_markers(ax, shock_step, temp_dev_delay)
+        _draw_shock_markers(ax, shock_step, temp_dev_delay, seen_labels)
     ax.set_xlabel('Week')
     ax.set_ylabel('Cumulative permanently displaced households')
     ax.set_xlim(window_start, window_end)
@@ -514,6 +713,7 @@ def build_aid_over_time_fig(aid_scenario_tracks, title_suffix):
     max_steps = max(track.shape[1] for _, track, _, _ in plotted)
     multi = len(plotted) > 1
     fig, ax = plt.subplots(figsize=(9, 5.5))
+    seen_labels = set()
     for idx, (label, track, shock_step, temp_dev_delay) in enumerate(plotted):
         steps = np.arange(1, track.shape[1] + 1)
         dm, ds = _mean_std(track)
@@ -522,7 +722,7 @@ def build_aid_over_time_fig(aid_scenario_tracks, title_suffix):
                  label=f'Cumulative aid distributed{f" -- {label}" if multi else " (mean)"}')
         ax.fill_between(steps, np.clip(dm - ds, 0, None), dm + ds, color=color, alpha=0.18)
         if shock_step is not None and shock_step < max_steps:
-            _draw_shock_markers(ax, shock_step, temp_dev_delay)
+            _draw_shock_markers(ax, shock_step, temp_dev_delay, seen_labels)
     ax.set_xlabel('Week')
     ax.set_ylabel('Cumulative aid distributed ($)')
     ax.set_xlim(1, max_steps)
@@ -563,24 +763,38 @@ def plot_shelter_timeseries(scenario_tracks, out_dir, title_suffix):
     os.makedirs(out_dir, exist_ok=True)
 
     # ---- shelter_tiers.png: three tiers + total currently sheltered ----
+    # chat 2026-09-23: all 4 series use ONE fixed color/style each,
+    # regardless of how many scenarios are overlaid (unlike
+    # total_sheltered.png/permanent_displacement.png, which vary color BY
+    # scenario) -- per-scenario color was previously only applied to the
+    # "Total currently sheltered" line (the 3 tier lines were always fixed-
+    # color), producing a legend with one entry per (tier x scenario)
+    # combination whose color didn't actually vary, i.e. pure duplicate
+    # text for lines rendered identically. seen_labels (shared with
+    # _draw_shock_markers) now dedupes ALL 4 tier labels the same way the
+    # shock/temp-dev markers already were, down to exactly 4 entries total
+    # regardless of scenario count.
     fig, ax = plt.subplots(figsize=(10, 6))
+    seen_labels = set()
     for idx, (label, imm, out_, tmp, perm, shock_step, temp_dev_delay, n_steps) in enumerate(plotted):
         total = imm + out_ + tmp
         m = min(mask.size, n_steps)
         sub_mask = mask[:m]
         sub_steps = steps_full[:m][sub_mask]
-        tier_suffix = f' -- {label}' if multi else ''
         for tlabel, data, color, ls, lw in [
-            (f'Immediate/hotel shelter{tier_suffix}', imm, 'tab:blue', '-', 1.8),
-            (f'Sheltered outside (overflow){tier_suffix}', out_, 'tab:orange', '-', 1.8),
-            (f'Temp-dev sites{tier_suffix}', tmp, 'tab:green', '-', 1.8),
-            (f'Total currently sheltered{tier_suffix}', total, COLORS[idx % len(COLORS)], '--', 2.4),
+            ('Immediate/hotel shelter', imm, 'tab:blue', '-', 1.8),
+            ('Sheltered outside (overflow)', out_, 'tab:orange', '-', 1.8),
+            ('Temp-dev sites', tmp, 'tab:green', '-', 1.8),
+            ('Total currently sheltered', total, 'black', '--', 2.4),
         ]:
             dm, ds = _mean_std(data)
-            ax.plot(sub_steps, dm[:m][sub_mask], color=color, linewidth=lw, linestyle=ls, label=tlabel)
+            already = tlabel in seen_labels
+            ax.plot(sub_steps, dm[:m][sub_mask], color=color, linewidth=lw, linestyle=ls,
+                     label=None if already else tlabel)
+            seen_labels.add(tlabel)
             ax.fill_between(sub_steps, np.clip(dm[:m][sub_mask] - ds[:m][sub_mask], 0, None),
                              dm[:m][sub_mask] + ds[:m][sub_mask], color=color, alpha=0.13)
-        _draw_shock_markers(ax, shock_step, temp_dev_delay)
+        _draw_shock_markers(ax, shock_step, temp_dev_delay, seen_labels)
     ax.set_xlabel('Week')
     ax.set_ylabel('Households')
     ax.set_xlim(window_start, window_end)
@@ -616,19 +830,63 @@ def plot_aid_timeseries(aid_scenario_tracks, out_dir, title_suffix):
     plt.close(fig)
 
 
-def smooth(v, window=SMOOTH_WINDOW):
+def smooth(v, window=SMOOTH_WINDOW, x=None, break_at=None):
+    """Centered rolling mean (see SMOOTH_WINDOW). BUG FOUND chat
+    2026-09-23: center=True means the window looks BOTH forward and
+    backward, so a sharp discontinuity (the shock) bled backward into the
+    displayed pre-shock curve - verified against raw .mat data that
+    pre-shock trajectories are bit-identical across all 5 seeds between a
+    no-shock and a shock scenario, yet the smoothed chart showed them
+    diverging ~3 steps (window//2) before the shock actually fired. Fix:
+    when x (this series' real step index, from load_macro's 'x') and
+    break_at (the step the discontinuity happens at, e.g. shock_step) are
+    both given, split the series at that step and smooth each side
+    independently, so the window never crosses the break. Falls back to
+    the old whole-series behavior when break_at is None (e.g. no known
+    discontinuity for this scenario, like a no-shock baseline) or doesn't
+    fall within the plotted range."""
     import pandas as pd
-    s = pd.Series(v)
-    return s.rolling(window, min_periods=1, center=True).mean().values
+    if x is None or break_at is None or break_at <= x[0] or break_at >= x[-1]:
+        s = pd.Series(v)
+        return s.rolling(window, min_periods=1, center=True).mean().values
+    pre_mask = x < break_at
+    out = np.empty_like(np.asarray(v, dtype=float))
+    for mask in (pre_mask, ~pre_mask):
+        if mask.any():
+            out[mask] = pd.Series(np.asarray(v)[mask]).rolling(window, min_periods=1, center=True).mean().values
+    return out
 
 
-def plot_grid(macros, labels, out_path, title_suffix):
+def _common_break_at(markers_by_label, labels):
+    """A single shock-step boundary shared by every curve on one chart
+    (chat 2026-09-23 - see smooth()'s docstring for why this must be
+    shared rather than per-scenario). Using each scenario's OWN
+    shock_step (None for a no-shock baseline) gave every curve a
+    DIFFERENT window-capping treatment right at the boundary - the
+    no-shock curve's window was unconstrained while a shock scenario's
+    was capped at its own segment edge, so even though the underlying
+    pre-shock DATA was verified bit-identical across scenarios, the
+    smoothed curves still diverged by a small but visible amount right
+    before the boundary (worse for narrow-range variables like SA_WAGE
+    than wide-range ones like SA_WP). Using the SAME break point (the
+    earliest firing shock_step among all plotted scenarios) for every
+    curve's smoothing call - including scenarios with no shock of their
+    own - makes the windowing treatment identical everywhere, so
+    identical underlying data produces identical smoothed output."""
+    vals = [(markers_by_label or {}).get(l, (None, None))[0] for l in labels]
+    vals = [v for v in vals if v is not None]
+    return min(vals) if vals else None
+
+
+def plot_grid(macros, labels, out_path, title_suffix, markers_by_label=None):
     n_vars = len(ALL_VARS)
     ncols = 4
     nrows = -(-n_vars // ncols)
+    common_break = _common_break_at(markers_by_label, labels)
     fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 3.6 * nrows))
     for ax, (v, vlabel, detail, derived) in zip(axes.flat, ALL_VARS):
         any_data = False
+        max_step = 0.0
         for macro, label, color in zip(macros, labels, COLORS):
             entry = macro.get(v)
             series = entry['values'] if entry else np.array([])
@@ -636,13 +894,17 @@ def plot_grid(macros, labels, out_path, title_suffix):
                 continue
             any_data = True
             steps = entry['x']
+            max_step = max(max_step, np.max(steps) if len(steps) else 0.0)
             mean_raw = np.nanmean(series, axis=0)
             std_raw = np.nanstd(series, axis=0)
-            ax.plot(steps, smooth(mean_raw), color=color, linewidth=1.6, label=label if len(labels) > 1 else None)
-            ax.fill_between(steps, smooth(mean_raw - std_raw), smooth(mean_raw + std_raw), color=color, alpha=0.15)
+            break_at = common_break if common_break is not None and common_break < steps[-1] else None
+            ax.plot(steps, smooth(mean_raw, x=steps, break_at=break_at), color=color, linewidth=1.6, label=label if len(labels) > 1 else None)
+            ax.fill_between(steps, smooth(mean_raw - std_raw, x=steps, break_at=break_at), smooth(mean_raw + std_raw, x=steps, break_at=break_at), color=color, alpha=0.15)
         if not any_data:
             ax.axis('off')
             continue
+        if markers_by_label:
+            _draw_step_markers(ax, markers_by_label, max_step)
         # line-wrap full_label()'s text after the descriptive label so it
         # fits the small grid panel -- same content, newline instead of a
         # space before the parenthetical
@@ -731,9 +993,14 @@ def build_subsidy_table_figure(subsidy_by_label, labels, title_suffix):
 
 
 def plot_pdf_and_pngs(macros, labels, shelter_by_label, pdf_path, png_dir, title_suffix, scenario_tracks=None,
-                       subsidy_by_label=None, aid_scenario_tracks=None):
+                       subsidy_by_label=None, aid_scenario_tracks=None, markers_by_label=None, scenario_info=None,
+                       show_pattern_column=True):
     os.makedirs(png_dir, exist_ok=True)
     with PdfPages(pdf_path) as pdf:
+        if scenario_info:
+            title_fig = build_title_page_figure(title_suffix, scenario_info, show_pattern=show_pattern_column)
+            pdf.savefig(title_fig, bbox_inches='tight')
+            plt.close(title_fig)
         table_fig = build_table_figure(shelter_by_label, labels, title_suffix)
         pdf.savefig(table_fig, bbox_inches='tight')
         plt.close(table_fig)
@@ -753,20 +1020,26 @@ def plot_pdf_and_pngs(macros, labels, shelter_by_label, pdf_path, png_dir, title
             if aid_fig is not None:
                 pdf.savefig(aid_fig, bbox_inches='tight')
                 plt.close(aid_fig)
+        common_break = _common_break_at(markers_by_label, labels)
         for v, vlabel, detail, derived in ALL_VARS:
             if all((macro.get(v) or {}).get('values', np.array([])).size == 0 for macro in macros):
                 continue
             fig, ax = plt.subplots(figsize=(9, 5.5))
+            max_step = 0.0
             for macro, label, color in zip(macros, labels, COLORS):
                 entry = macro.get(v)
                 series = entry['values'] if entry else np.array([])
                 if series.size == 0:
                     continue
                 steps = entry['x']
+                max_step = max(max_step, np.max(steps) if len(steps) else 0.0)
                 mean_raw = np.nanmean(series, axis=0)
                 std_raw = np.nanstd(series, axis=0)
-                ax.plot(steps, smooth(mean_raw), color=color, linewidth=2, label=f'{label} (n={series.shape[0]})')
-                ax.fill_between(steps, smooth(mean_raw - std_raw), smooth(mean_raw + std_raw), color=color, alpha=0.15)
+                break_at = common_break if common_break is not None and common_break < steps[-1] else None
+                ax.plot(steps, smooth(mean_raw, x=steps, break_at=break_at), color=color, linewidth=2, label=f'{label} (n={series.shape[0]})')
+                ax.fill_between(steps, smooth(mean_raw - std_raw, x=steps, break_at=break_at), smooth(mean_raw + std_raw, x=steps, break_at=break_at), color=color, alpha=0.15)
+            if markers_by_label:
+                _draw_step_markers(ax, markers_by_label, max_step)
             ax.set_title(f'{full_label(v, vlabel, detail, derived)}{title_suffix}', fontsize=12)
             ax.set_xlabel('step (week)')
             ax.set_ylabel(vlabel)
@@ -783,18 +1056,20 @@ def main():
     ap.add_argument('--city', action='append', default=[], help=f'friendly city name ({", ".join(CITY_PREFIX)}) - repeatable for a side-by-side comparison')
     ap.add_argument('--pattern', action='append', default=[], help='raw glob pattern (without .mat) against earthquakeF/, for anything not in --city\'s known prefixes; pairs positionally with --label')
     ap.add_argument('--label', action='append', default=[], help='label for the matching --pattern entry (defaults to the pattern itself)')
+    ap.add_argument('--desc', action='append', default=[], help='plain-English description of the matching --pattern entry, shown on the title page only (chat 2026-09-23) - e.g. --label "mode 3" --desc "1-month subsidy, full wage bill covered", so the label used everywhere else in the report can stay short')
     ap.add_argument('--root', default=HERE, help='project root containing earthquakeF/ (default: this script\'s directory)')
     ap.add_argument('--out', default=os.path.join(HERE, 'plots_macro_comparison'), help='output directory')
     args = ap.parse_args()
 
-    scenarios = []  # list of (label, pattern)
+    scenarios = []  # list of (label, pattern, desc)
     for c in args.city:
         if c not in CITY_PREFIX:
             raise SystemExit(f'Unknown --city "{c}". Known: {list(CITY_PREFIX)}. Use --pattern for anything else.')
-        scenarios.append((c, f'{CITY_PREFIX[c]} EQ*'))
+        scenarios.append((c, f'{CITY_PREFIX[c]} EQ*', ''))
     for i, p in enumerate(args.pattern):
         label = args.label[i] if i < len(args.label) else p
-        scenarios.append((label, p))
+        desc = args.desc[i] if i < len(args.desc) else ''
+        scenarios.append((label, p, desc))
 
     if not scenarios:
         raise SystemExit('Pass at least one --city or --pattern.')
@@ -802,7 +1077,9 @@ def main():
     macros, labels, shelter_by_label, subsidy_by_label = [], [], {}, {}
     scenario_tracks = []
     aid_scenario_tracks = []
-    for label, pattern in scenarios:
+    markers_by_label = {}
+    scenario_info = []
+    for label, pattern, desc in scenarios:
         files = find_files(args.root, pattern)
         if not files:
             print(f'[warn] no files found for "{label}" (pattern "{pattern}*") under {args.root}\\earthquakeF\\ - skipping')
@@ -815,6 +1092,9 @@ def main():
         scenario_tracks.append((label, tracks, shock_step, temp_dev_delay))
         aid_track, aid_shock_step, aid_temp_dev_delay = load_aid_track(files)
         aid_scenario_tracks.append((label, aid_track, aid_shock_step, aid_temp_dev_delay))
+        markers_by_label[label] = load_step_markers(files)
+        city_meta, steps_meta, shock_step_meta = load_scenario_meta(files)
+        scenario_info.append((label, pattern, len(files), load_seeds(files), desc, city_meta, steps_meta, shock_step_meta))
         labels.append(label)
 
     if not macros:
@@ -824,9 +1104,10 @@ def main():
     title_suffix = ' vs. '.join(labels) if len(labels) > 1 else f' -- {labels[0]}'
     title_suffix = f' ({title_suffix})' if len(labels) > 1 else f' -- {labels[0]}'
 
-    plot_grid(macros, labels, os.path.join(args.out, 'macro_trends.png'), title_suffix)
+    plot_grid(macros, labels, os.path.join(args.out, 'macro_trends.png'), title_suffix, markers_by_label=markers_by_label)
     plot_pdf_and_pngs(macros, labels, shelter_by_label, os.path.join(args.out, 'macro_trends.pdf'), os.path.join(args.out, 'macro_pngs'), title_suffix,
-                       scenario_tracks=scenario_tracks, subsidy_by_label=subsidy_by_label, aid_scenario_tracks=aid_scenario_tracks)
+                       scenario_tracks=scenario_tracks, subsidy_by_label=subsidy_by_label, aid_scenario_tracks=aid_scenario_tracks,
+                       markers_by_label=markers_by_label, scenario_info=scenario_info)
     plot_shelter_timeseries(scenario_tracks, args.out, title_suffix)
     plot_aid_timeseries(aid_scenario_tracks, args.out, title_suffix)
     print(f'[done] -> {os.path.abspath(args.out)}')

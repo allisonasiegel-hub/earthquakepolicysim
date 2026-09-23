@@ -503,7 +503,11 @@ if ~exist('subsidy_residents_mode','var'); subsidy_residents_mode=0; end
 % subsidy_businesses_mode: 0=off, 1=destroyed commercial buildings only
 % (the original cal_bui_sa_subsidy.m behavior), 2=destroyed commercial
 % buildings UNION the smallest 30% of commercial buildings by current
-% worker headcount - see cal_bui_sa_subsidy_targeted.m.
+% worker headcount, 3=destroyed commercial buildings only, ENTIRE wage
+% bill zeroed for a fixed 4-step (1-month) window (closer to the
+% original rocketattack/RABM-matlab cal_bui_sa_subsidy.m treatment),
+% 4=destroyed commercial buildings only, HALF the wage bill counted for a
+% fixed 12-step (3-month) window - see cal_bui_sa_subsidy_targeted.m.
 if ~exist('subsidy_businesses_mode','var'); subsidy_businesses_mode=0; end
 subsidy_duration=9; % was 60 days (~2 months) -> ~9 weeks
 priority_recovery=0; % faster recovery of residential
@@ -892,6 +896,7 @@ total_aid_distributed=0;
 total_aid_distributed_track=zeros(1,steps); % per-step snapshot of the cumulative running total, so aid-over-time can be plotted (chat 2026-09-19)
 n_businesses_subsidized_total=0;
 businesses_subsidized_ever_ids=[];
+biz_subsidy_tracker=[]; % modes 3/4 fixed-duration tracker: [building_id, subsidy_start_step] - see cal_bui_sa_subsidy_targeted.m (chat 2026-09-22)
 
 %% start running
 if ~exist('loop_start_tic','var'); loop_start_tic=tic; end
@@ -1209,14 +1214,16 @@ for i=1:steps
         % HH no house
         HH_destroyed=shock_H(HH_data,Assets);
 
-        % BUSINESS SUBSIDY (modes 1/2's destroyed-buildings half) - snapshot
-        % pre-shock Work_places/Individuals_data for destroyed commercial
-        % buildings' workers BEFORE shock_W/shock_I strip them below. See
-        % the restoration block right after shock_I for why (chat
-        % 2026-09-19, bug found by the Tiberias session).
+        % BUSINESS SUBSIDY (modes 1/2/3/4's destroyed-buildings half) -
+        % snapshot pre-shock Work_places/Individuals_data for destroyed
+        % commercial buildings' workers BEFORE shock_W/shock_I strip them
+        % below. See the restoration block right after shock_I for why
+        % (chat 2026-09-19, bug found by the Tiberias session). Modes 3/4
+        % (chat 2026-09-22) need this snapshot for the same reason modes
+        % 1/2 do - see cal_bui_sa_subsidy_targeted.m.
         pre_shock_wp_snapshot = zeros(0, size(Work_places,2));
         pre_shock_ind_snapshot = zeros(0, size(Individuals_data,2));
-        if subsidy_businesses_mode == 1 || subsidy_businesses_mode == 2
+        if ismember(subsidy_businesses_mode, [1 2 3 4])
             destroyed_commercial_B0 = destroyed_B(ismember(destroyed_B(:,1), Build_Data(Build_Data(:,3)==3,1)), 1);
             pre_shock_wp_snapshot = Work_places(ismember(Work_places(:,1), destroyed_commercial_B0), :);
             pre_shock_ind_snapshot = Individuals_data(ismember(Individuals_data(:,17), pre_shock_wp_snapshot(:,6)), :);
@@ -1228,9 +1235,13 @@ for i=1:steps
         % change location and keep track because need to change routine
         [Individuals_data,Ind_change_routine]=shock_I(Individuals_data,lost_jobs);
 
-        % BUSINESS SUBSIDY (modes 1/2's destroyed-buildings half) - restore
-        % 2 job slots per eligible destroyed commercial building (chat
-        % 2026-09-19). shock_W/shock_I above permanently strip EVERY
+        % BUSINESS SUBSIDY (modes 1/2/3/4's destroyed-buildings half) -
+        % restore 2 job slots per eligible destroyed commercial building
+        % (chat 2026-09-19; extended to modes 3/4, chat 2026-09-22, for
+        % the identical reason - see cal_bui_sa_subsidy_targeted.m, and
+        % note both new modes' length(building_salaries)>1 eligibility
+        % guard needs at least 2 live workers restored same as modes
+        % 1/2). shock_W/shock_I above permanently strip EVERY
         % destroyed building's Work_places rows and move those workers to
         % job-search, so cal_bui_sa_subsidy_targeted.m's mode-1 eligibility
         % check (ismember(building, destroyed_ids), keyed off live
@@ -1251,7 +1262,7 @@ for i=1:steps
         % SA_WP/"jobs saved" - the actual metric this sweep measures.
         % Buildings with originally <=1 worker get nothing restored,
         % matching the function's own ">1 worker" eligibility guard.
-        if subsidy_businesses_mode == 1 || subsidy_businesses_mode == 2
+        if ismember(subsidy_businesses_mode, [1 2 3 4])
             destroyed_commercial_B = destroyed_B(ismember(destroyed_B(:,1), Build_Data(Build_Data(:,3)==3,1)), 1);
             for db = 1:length(destroyed_commercial_B)
                 bld_id = destroyed_commercial_B(db);
@@ -1520,7 +1531,7 @@ for i=1:steps
                 
         %% mean salary for all buildings withe workers comm only!!!
         %building_average_salary=cal_bui_sa(Work_places,Build_Data); % building sum salary
-        [building_average_salary,n_businesses_subsidized_total,businesses_subsidized_ever_ids]=cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids); % building sum salary
+        [building_average_salary,n_businesses_subsidized_total,businesses_subsidized_ever_ids,biz_subsidy_tracker]=cal_bui_sa_subsidy_targeted(Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids, biz_subsidy_tracker, i); % building sum salary
         % STABLE-YARDSTICK FIX (chat 2026-09-15): build the percentile scale
         % from col(3), every building's REAL unsubsidized wage sum - not
         % col(2), the eligibility-adjusted one - so the scale itself never
@@ -2197,7 +2208,8 @@ clearvars -except Assets Assets_P Build_Data Build_Data_p HH_data HH_data_P...
             n_immediate_hh_track n_outside_hh_track n_tempdev_hh_track...
             n_permanently_displaced_total n_permanently_displaced_track...
             n_original_hh_permanently_displaced_total n_original_hh_permanently_displaced_track...
-            n_hh_subsidized_total total_aid_distributed total_aid_distributed_track n_businesses_subsidized_total businesses_subsidized_ever_ids...
+            n_hh_subsidized_total total_aid_distributed total_aid_distributed_track n_businesses_subsidized_total businesses_subsidized_ever_ids biz_subsidy_tracker...
+            lu_warmup...
             rng_seed
 full_file_name = fullfile(['earthquakeF\',char(out_file_name),' ',run_timestamp,' ',num2str(kk),' ',run_uid]);
 save(full_file_name);

@@ -1,5 +1,5 @@
-function [building_average_sa, n_businesses_subsidized_total, businesses_subsidized_ever_ids] = cal_bui_sa_subsidy_targeted(...
-    Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids)
+function [building_average_sa, n_businesses_subsidized_total, businesses_subsidized_ever_ids, biz_subsidy_tracker] = cal_bui_sa_subsidy_targeted(...
+    Work_places, Build_Data, destroyed_B, destroyed_commercial_B0, subsidy_businesses_mode, n_businesses_subsidized_total, businesses_subsidized_ever_ids, biz_subsidy_tracker, step_num)
 % destroyed_commercial_B0: fixed, one-time snapshot (taken at shock time
 % in run_model_earthquake_shelteroverflow.m, before shock_W/shock_I strip
 % anything) of buildings that were ALREADY commercial (usage=3) the
@@ -46,6 +46,21 @@ function [building_average_sa, n_businesses_subsidized_total, businesses_subsidi
 %       so that part of the eligible set can shift over time as
 %       businesses reopen, hire, or shrink; the destroyed half is a
 %       fixed one-time set like mode 1's.
+%   3/4 = FIXED-DURATION modes (chat 2026-09-22), ported closer to the
+%       ORIGINAL rocketattack/RABM-matlab cal_bui_sa_subsidy.m design
+%       (destroyed-buildings-only eligibility, whole wage-bill treatment)
+%       than modes 1/2's "drop 2 lowest earners" - but time-limited
+%       instead of running for as long as the building stays destroyed,
+%       matching HH_subsidy_targeted.m modes 5/6's "grant once on first
+%       eligibility, no early exit" pattern via biz_subsidy_tracker
+%       (columns: [building_id, subsidy_start_step]). Eligibility to
+%       START the clock is the same "was destroyed AND was commercial at
+%       shock" rule as mode 1; once started, the fixed window runs to
+%       completion regardless of later recovery.
+%   3 = the ENTIRE wage bill is zeroed (not just the 2 lowest earners),
+%       for a fixed 4-step (1-month) window.
+%   4 = HALF the wage bill is counted, for a fixed 12-step (3-month)
+%       window.
 %
 % Ported from b7/b7ABM-matlab/cal_bui_sa_sub.m's epidemic-era business
 % subsidy (chat 2026-09-15): for an eligible building, the wage expense
@@ -114,16 +129,52 @@ function [building_average_sa, n_businesses_subsidized_total, businesses_subsidi
                 eligible = was_destroyed_commercial;
             case 2
                 eligible = was_destroyed_commercial || worker_counts(i) <= size_threshold;
+            case {3, 4}
+                % Start the clock once, on first eligibility - see this
+                % function's header. biz_subsidy_tracker is checked (not
+                % just started) every call so the fixed window keeps
+                % running on later steps even after the building recovers
+                % and was_destroyed_commercial goes false. isempty guard
+                % first (like HH_subsidy_tracker elsewhere) - indexing
+                % column 1 of an empty [] errors in MATLAB.
+                already_tracked = ~isempty(biz_subsidy_tracker) && ismember(u2(i), biz_subsidy_tracker(:,1));
+                if was_destroyed_commercial && ~already_tracked
+                    biz_subsidy_tracker = [biz_subsidy_tracker; u2(i), step_num];
+                end
+                tracked_row = [];
+                if ~isempty(biz_subsidy_tracker)
+                    tracked_row = find(biz_subsidy_tracker(:,1) == u2(i), 1);
+                end
+                if ~isempty(tracked_row)
+                    if subsidy_businesses_mode == 3
+                        duration = 4; % 1 month
+                    else
+                        duration = 12; % 3 months
+                    end
+                    eligible = (step_num - biz_subsidy_tracker(tracked_row,2)) < duration;
+                end
         end
         if eligible && length(building_salaries) > 1
-            % Drop the 2 lowest-paid workers' salaries from the counted
-            % wage bill - the subsidy covers their wages, not the whole
-            % building's payroll. A building with only 2 eligible workers
-            % has both dropped (fully covered); 1-worker buildings never
-            % reach here due to the length>1 guard above.
-            sorted_asc = sort(building_salaries, 'ascend');
-            n_drop = min(2, length(sorted_asc));
-            building_salaries = sorted_asc(n_drop+1:end);
+            switch subsidy_businesses_mode
+                case 3
+                    % Original rocketattack/RABM-matlab treatment: zero
+                    % the entire counted wage bill, not just 2 earners.
+                    building_salaries = zeros(size(building_salaries));
+                case 4
+                    % Half the wage bill counted - the subsidy covers the
+                    % other half.
+                    building_salaries = building_salaries * 0.5;
+                otherwise
+                    % Modes 1/2: drop the 2 lowest-paid workers' salaries
+                    % from the counted wage bill - the subsidy covers
+                    % their wages, not the whole building's payroll. A
+                    % building with only 2 eligible workers has both
+                    % dropped (fully covered); 1-worker buildings never
+                    % reach here due to the length>1 guard above.
+                    sorted_asc = sort(building_salaries, 'ascend');
+                    n_drop = min(2, length(sorted_asc));
+                    building_salaries = sorted_asc(n_drop+1:end);
+            end
             if ~ismember(u2(i), businesses_subsidized_ever_ids)
                 businesses_subsidized_ever_ids = [businesses_subsidized_ever_ids; u2(i)];
                 n_businesses_subsidized_total = n_businesses_subsidized_total + 1;
